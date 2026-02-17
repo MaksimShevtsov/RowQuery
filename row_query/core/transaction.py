@@ -23,7 +23,7 @@ class _TxState(Enum):
 
 def _rows_to_dicts(cursor: Any) -> list[dict[str, Any]]:
     """Convert cursor results to list of dicts.
-    
+
     Handles both tuple-like rows and dict-like rows from different adapters.
     """
     if cursor.description is None:
@@ -32,12 +32,12 @@ def _rows_to_dicts(cursor: Any) -> list[dict[str, Any]]:
     rows = cursor.fetchall()
     if not rows:
         return []
-    
+
     # Check if rows are already dict-like
     first_row = rows[0]
     if isinstance(first_row, dict):
         return [dict(row) for row in rows]
-    
+
     # Tuple-like rows, zip with columns
     return [dict(zip(columns, row, strict=True)) for row in rows]
 
@@ -218,13 +218,13 @@ class AsyncTransactionManager:
             return None
         columns = [desc[0] for desc in cursor.description]
         rows_raw = await cursor.fetchall()
-        
+
         # Handle dict rows vs tuple rows
         if rows_raw and isinstance(rows_raw[0], dict):
             rows = [dict(row) for row in rows_raw]
         else:
             rows = [dict(zip(columns, row, strict=True)) for row in rows_raw]
-        
+
         if not rows:
             return None
         return rows[0]
@@ -243,7 +243,7 @@ class AsyncTransactionManager:
             return []
         columns = [desc[0] for desc in cursor.description]
         rows_raw = await cursor.fetchall()
-        
+
         # Handle dict rows vs tuple rows
         if rows_raw and isinstance(rows_raw[0], dict):
             return [dict(row) for row in rows_raw]
