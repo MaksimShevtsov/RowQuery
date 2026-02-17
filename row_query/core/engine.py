@@ -13,11 +13,30 @@ from row_query.core.exceptions import (
     MultipleRowsError,
     ParameterBindingError,
 )
-from row_query.core.params import normalize_params
+from row_query.core.params import coerce_params, is_raw_sql, normalize_params
 from row_query.core.registry import SQLRegistry
+from row_query.core.sanitizer import SQLSanitizer
 from row_query.core.transaction import AsyncTransactionManager, TransactionManager
 
 T = TypeVar("T")
+
+
+def _resolve_sql(
+    query: str,
+    registry: SQLRegistry,
+    sanitizer: SQLSanitizer | None = None,
+) -> tuple[str, str]:
+    """Return ``(sql_text, label)`` for *query*.
+
+    If *query* is an inline SQL string (contains whitespace) it is returned
+    after optional sanitization.  Otherwise it is looked up in *registry* by
+    name (registry queries are trusted and never sanitized).  *label* is used
+    in error messages.
+    """
+    if is_raw_sql(query):
+        sql = sanitizer.sanitize(query) if sanitizer is not None else query
+        return sql, "<inline>"
+    return registry.get(query), query
 
 
 def _rows_to_dicts(cursor: Any) -> list[dict[str, Any]]:
@@ -69,9 +88,11 @@ class Engine:
         self,
         connection_manager: ConnectionManager,
         registry: SQLRegistry,
+        sanitizer: SQLSanitizer | None = None,
     ) -> None:
         self._connection_manager = connection_manager
         self._registry = registry
+        self._sanitizer = sanitizer
         self._paramstyle = connection_manager.adapter.paramstyle
 
     @classmethod
@@ -79,46 +100,56 @@ class Engine:
         cls,
         config: Any,
         registry: SQLRegistry,
+        sanitizer: SQLSanitizer | None = None,
     ) -> Engine:
         """Create an Engine from a ConnectionConfig and SQLRegistry.
 
         Args:
             config: ConnectionConfig instance
             registry: SQLRegistry instance
+            sanitizer: Optional SQLSanitizer applied to inline SQL strings.
 
         Returns:
             Engine instance
         """
         connection_manager = ConnectionManager(config)
-        return cls(connection_manager, registry)
+        return cls(connection_manager, registry, sanitizer)
 
     def fetch_one(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
         *,
         mapper: Any | None = None,
     ) -> Any:
         """Fetch a single row.
 
+        *query* may be a registry key (e.g. ``"users.get_by_id"``) or an
+        inline SQL string (e.g. ``"SELECT * FROM users WHERE id = ?"``).
+
+        *params* may be a ``dict`` for named binding, a ``tuple``/``list`` for
+        positional binding, or a single scalar that is automatically wrapped in
+        a tuple.
+
         Returns None if zero rows match.
         Raises MultipleRowsError if more than one row matches.
         """
-        sql = self._registry.get(query_name)
+        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
+        bound = coerce_params(params)
 
         with self._connection_manager.get_connection() as conn:
             try:
-                cursor = self._connection_manager.adapter.execute(conn, sql, params)
+                cursor = self._connection_manager.adapter.execute(conn, sql, bound)
             except Exception as e:
-                raise ParameterBindingError(query_name, str(e)) from e
+                raise ParameterBindingError(label, str(e)) from e
 
             rows = _rows_to_dicts(cursor)
 
         if len(rows) == 0:
             return None
         if len(rows) > 1:
-            raise MultipleRowsError(query_name, len(rows))
+            raise MultipleRowsError(label, len(rows))
 
         row = rows[0]
         if mapper is not None:
@@ -127,20 +158,25 @@ class Engine:
 
     def fetch_all(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
         *,
         mapper: Any | None = None,
     ) -> Any:
-        """Fetch all matching rows."""
-        sql = self._registry.get(query_name)
+        """Fetch all matching rows.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
+        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
+        bound = coerce_params(params)
 
         with self._connection_manager.get_connection() as conn:
             try:
-                cursor = self._connection_manager.adapter.execute(conn, sql, params)
+                cursor = self._connection_manager.adapter.execute(conn, sql, bound)
             except Exception as e:
-                raise ParameterBindingError(query_name, str(e)) from e
+                raise ParameterBindingError(label, str(e)) from e
 
             rows = _rows_to_dicts(cursor)
 
@@ -150,18 +186,23 @@ class Engine:
 
     def fetch_scalar(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
     ) -> Any:
-        """Fetch a single scalar value (first column of first row)."""
-        sql = self._registry.get(query_name)
+        """Fetch a single scalar value (first column of first row).
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
+        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
+        bound = coerce_params(params)
 
         with self._connection_manager.get_connection() as conn:
             try:
-                cursor = self._connection_manager.adapter.execute(conn, sql, params)
+                cursor = self._connection_manager.adapter.execute(conn, sql, bound)
             except Exception as e:
-                raise ParameterBindingError(query_name, str(e)) from e
+                raise ParameterBindingError(label, str(e)) from e
 
             row = cursor.fetchone()
             if row is None:
@@ -177,18 +218,23 @@ class Engine:
 
     def execute(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
     ) -> int:
-        """Execute a write query. Returns affected row count."""
-        sql = self._registry.get(query_name)
+        """Execute a write query. Returns affected row count.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
+        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
+        bound = coerce_params(params)
 
         with self._connection_manager.get_connection() as conn:
             try:
-                cursor = self._connection_manager.adapter.execute(conn, sql, params)
+                cursor = self._connection_manager.adapter.execute(conn, sql, bound)
             except Exception as e:
-                raise ParameterBindingError(query_name, str(e)) from e
+                raise ParameterBindingError(label, str(e)) from e
 
             conn.commit()
             return int(cursor.rowcount)
@@ -204,6 +250,7 @@ class Engine:
             adapter=self._connection_manager.adapter,
             registry=self._registry,
             pool=pool,
+            sanitizer=self._sanitizer,
         )
 
 
@@ -214,9 +261,11 @@ class AsyncEngine:
         self,
         connection_manager: AsyncConnectionManager,
         registry: SQLRegistry,
+        sanitizer: SQLSanitizer | None = None,
     ) -> None:
         self._connection_manager = connection_manager
         self._registry = registry
+        self._sanitizer = sanitizer
         self._paramstyle = connection_manager.adapter.paramstyle
 
     @classmethod
@@ -224,35 +273,42 @@ class AsyncEngine:
         cls,
         config: Any,
         registry: SQLRegistry,
+        sanitizer: SQLSanitizer | None = None,
     ) -> AsyncEngine:
         """Create an AsyncEngine from a ConnectionConfig and SQLRegistry.
 
         Args:
             config: ConnectionConfig instance
             registry: SQLRegistry instance
+            sanitizer: Optional SQLSanitizer applied to inline SQL strings.
 
         Returns:
             AsyncEngine instance
         """
         connection_manager = AsyncConnectionManager(config)
-        return cls(connection_manager, registry)
+        return cls(connection_manager, registry, sanitizer)
 
     async def fetch_one(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
         *,
         mapper: Any | None = None,
     ) -> Any:
-        """Fetch a single row asynchronously."""
-        sql = self._registry.get(query_name)
+        """Fetch a single row asynchronously.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
+        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
+        bound = coerce_params(params)
 
         async with self._connection_manager.get_connection() as conn:
             try:
-                cursor = await self._connection_manager.adapter.execute_async(conn, sql, params)
+                cursor = await self._connection_manager.adapter.execute_async(conn, sql, bound)
             except Exception as e:
-                raise ParameterBindingError(query_name, str(e)) from e
+                raise ParameterBindingError(label, str(e)) from e
 
             if cursor.description is None:
                 return None
@@ -268,7 +324,7 @@ class AsyncEngine:
         if len(rows) == 0:
             return None
         if len(rows) > 1:
-            raise MultipleRowsError(query_name, len(rows))
+            raise MultipleRowsError(label, len(rows))
 
         row = rows[0]
         if mapper is not None:
@@ -277,20 +333,25 @@ class AsyncEngine:
 
     async def fetch_all(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
         *,
         mapper: Any | None = None,
     ) -> Any:
-        """Fetch all matching rows asynchronously."""
-        sql = self._registry.get(query_name)
+        """Fetch all matching rows asynchronously.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
+        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
+        bound = coerce_params(params)
 
         async with self._connection_manager.get_connection() as conn:
             try:
-                cursor = await self._connection_manager.adapter.execute_async(conn, sql, params)
+                cursor = await self._connection_manager.adapter.execute_async(conn, sql, bound)
             except Exception as e:
-                raise ParameterBindingError(query_name, str(e)) from e
+                raise ParameterBindingError(label, str(e)) from e
 
             if cursor.description is None:
                 return []
@@ -309,18 +370,23 @@ class AsyncEngine:
 
     async def fetch_scalar(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
     ) -> Any:
-        """Fetch a single scalar value asynchronously."""
-        sql = self._registry.get(query_name)
+        """Fetch a single scalar value asynchronously.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
+        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
+        bound = coerce_params(params)
 
         async with self._connection_manager.get_connection() as conn:
             try:
-                cursor = await self._connection_manager.adapter.execute_async(conn, sql, params)
+                cursor = await self._connection_manager.adapter.execute_async(conn, sql, bound)
             except Exception as e:
-                raise ParameterBindingError(query_name, str(e)) from e
+                raise ParameterBindingError(label, str(e)) from e
 
             row = await cursor.fetchone()
             if row is None:
@@ -336,18 +402,23 @@ class AsyncEngine:
 
     async def execute(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
     ) -> int:
-        """Execute a write query asynchronously."""
-        sql = self._registry.get(query_name)
+        """Execute a write query asynchronously.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
+        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
+        bound = coerce_params(params)
 
         async with self._connection_manager.get_connection() as conn:
             try:
-                cursor = await self._connection_manager.adapter.execute_async(conn, sql, params)
+                cursor = await self._connection_manager.adapter.execute_async(conn, sql, bound)
             except Exception as e:
-                raise ParameterBindingError(query_name, str(e)) from e
+                raise ParameterBindingError(label, str(e)) from e
 
             await conn.commit()
             return int(cursor.rowcount)
@@ -362,4 +433,5 @@ class AsyncEngine:
             adapter=self._connection_manager.adapter,
             registry=self._registry,
             connection_manager=self._connection_manager,
+            sanitizer=self._sanitizer,
         )

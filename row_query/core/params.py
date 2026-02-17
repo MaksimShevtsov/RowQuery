@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
+from typing import Any
 
 # Matches :name but not ::typecast and not inside words
 # Negative lookbehind for : (handles ::), \w (handles mid-word colons)
@@ -53,3 +54,28 @@ def _convert_to_pyformat(sql: str) -> str:
         parts.append(_PARAM_PATTERN.sub(r"%(\1)s", sql[last_end:]))
 
     return "".join(parts)
+
+
+def is_raw_sql(query: str) -> bool:
+    """Return True if query is an inline SQL string rather than a registry key.
+
+    Registry keys use dot-notation (e.g. ``users.get_by_id``) and never
+    contain whitespace.  Any SQL statement will contain at least one space.
+    """
+    return any(c.isspace() for c in query)
+
+
+def coerce_params(
+    params: dict[str, Any] | tuple[Any, ...] | list[Any] | Any,
+) -> dict[str, Any] | tuple[Any, ...] | None:
+    """Normalize *params* to a dict, tuple, or None.
+
+    * ``None`` / ``dict`` → returned as-is (named parameter binding).
+    * ``tuple`` / ``list`` → converted to ``tuple`` (positional binding).
+    * Any other scalar → wrapped in a single-element tuple.
+    """
+    if params is None or isinstance(params, dict):
+        return params
+    if isinstance(params, (tuple, list)):
+        return tuple(params)
+    return (params,)

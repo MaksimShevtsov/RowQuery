@@ -60,6 +60,13 @@ class ParameterBindingError(ExecutionError):
         super().__init__(f"Parameter binding error for '{query_name}': {detail}")
 
 
+class SQLSanitizationError(ExecutionError):
+    """Raised when an inline SQL string fails a sanitization check."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"SQL sanitization failed: {detail}")
+
+
 # --- Mapping ---
 
 
