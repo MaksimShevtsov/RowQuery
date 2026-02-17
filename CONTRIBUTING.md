@@ -108,7 +108,7 @@ Never commit directly to `main`. Always:
 git checkout main && git pull          # start from latest main
 git checkout -b 042-my-feature         # create feature branch
 # ... make changes ...
-git push -u origin 42-my-feature       # push feature branch
+git push -u origin 042-my-feature      # push feature branch
 gh pr create                           # open PR targeting main
 ```
 
