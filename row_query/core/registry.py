@@ -28,6 +28,7 @@ class SQLRegistry:
     def __init__(self, root_dir: Path | str) -> None:
         self._root_dir = Path(root_dir)
         self._queries: dict[str, str] = {}
+        self._query_paths: dict[str, Path] = {}  # Track file paths
         self._load()
 
     def _load(self) -> None:
@@ -45,11 +46,12 @@ class SQLRegistry:
             if query_name in self._queries:
                 raise DuplicateQueryError(
                     query_name,
-                    str(self._queries[query_name]),
+                    str(self._query_paths[query_name]),
                     str(sql_file),
                 )
 
             self._queries[query_name] = sql_file.read_text(encoding="utf-8").strip()
+            self._query_paths[query_name] = sql_file
 
     def get(self, query_name: str) -> str:
         """Look up SQL text by namespace-qualified name.

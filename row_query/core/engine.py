@@ -21,21 +21,44 @@ T = TypeVar("T")
 
 
 def _rows_to_dicts(cursor: Any) -> list[dict[str, Any]]:
-    """Convert cursor results to list of dicts."""
+    """Convert cursor results to list of dicts.
+    
+    Handles both tuple-like rows and dict-like rows from different adapters.
+    """
     if cursor.description is None:
         return []
     columns = [desc[0] for desc in cursor.description]
-    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+    rows = cursor.fetchall()
+    if not rows:
+        return []
+    
+    # Check if rows are already dict-like (e.g., psycopg dict_row, MySQL dict cursor)
+    first_row = rows[0]
+    if isinstance(first_row, dict):
+        # Already dicts, return as-is (copy to ensure consistency)
+        return [dict(row) for row in rows]
+    
+    # Tuple-like rows, zip with columns
+    return [dict(zip(columns, row, strict=True)) for row in rows]
 
 
 def _row_to_dict(cursor: Any) -> dict[str, Any] | None:
-    """Convert a single cursor row to dict, or None."""
+    """Convert a single cursor row to dict, or None.
+    
+    Handles both tuple-like rows and dict-like rows from different adapters.
+    """
     if cursor.description is None:
         return None
     columns = [desc[0] for desc in cursor.description]
     row = cursor.fetchone()
     if row is None:
         return None
+    
+    # Check if row is already dict-like
+    if isinstance(row, dict):
+        return dict(row)
+    
+    # Tuple-like row, zip with columns
     return dict(zip(columns, row, strict=True))
 
 
@@ -50,6 +73,24 @@ class Engine:
         self._connection_manager = connection_manager
         self._registry = registry
         self._paramstyle = connection_manager.adapter.paramstyle
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Any,
+        registry: SQLRegistry,
+    ) -> "Engine":
+        """Create an Engine from a ConnectionConfig and SQLRegistry.
+        
+        Args:
+            config: ConnectionConfig instance
+            registry: SQLRegistry instance
+            
+        Returns:
+            Engine instance
+        """
+        connection_manager = ConnectionManager(config)
+        return cls(connection_manager, registry)
 
     def fetch_one(
         self,
@@ -125,6 +166,13 @@ class Engine:
             row = cursor.fetchone()
             if row is None:
                 return None
+            
+            # Handle dict rows (e.g., psycopg dict_row)
+            if isinstance(row, dict):
+                # Return the first value in column order
+                return next(iter(row.values())) if row else None
+            
+            # Tuple-like row
             return row[0]
 
     def execute(
@@ -171,6 +219,24 @@ class AsyncEngine:
         self._registry = registry
         self._paramstyle = connection_manager.adapter.paramstyle
 
+    @classmethod
+    def from_config(
+        cls,
+        config: Any,
+        registry: SQLRegistry,
+    ) -> "AsyncEngine":
+        """Create an AsyncEngine from a ConnectionConfig and SQLRegistry.
+        
+        Args:
+            config: ConnectionConfig instance
+            registry: SQLRegistry instance
+            
+        Returns:
+            AsyncEngine instance
+        """
+        connection_manager = AsyncConnectionManager(config)
+        return cls(connection_manager, registry)
+
     async def fetch_one(
         self,
         query_name: str,
@@ -192,7 +258,12 @@ class AsyncEngine:
                 return None
             columns = [desc[0] for desc in cursor.description]
             rows_raw = await cursor.fetchall()
-            rows = [dict(zip(columns, row, strict=True)) for row in rows_raw]
+            
+            # Handle dict rows vs tuple rows
+            if rows_raw and isinstance(rows_raw[0], dict):
+                rows = [dict(row) for row in rows_raw]
+            else:
+                rows = [dict(zip(columns, row, strict=True)) for row in rows_raw]
 
         if len(rows) == 0:
             return None
@@ -225,7 +296,12 @@ class AsyncEngine:
                 return []
             columns = [desc[0] for desc in cursor.description]
             rows_raw = await cursor.fetchall()
-            rows = [dict(zip(columns, row, strict=True)) for row in rows_raw]
+            
+            # Handle dict rows vs tuple rows
+            if rows_raw and isinstance(rows_raw[0], dict):
+                rows = [dict(row) for row in rows_raw]
+            else:
+                rows = [dict(zip(columns, row, strict=True)) for row in rows_raw]
 
         if mapper is not None:
             return mapper.map_many(rows)
@@ -249,6 +325,13 @@ class AsyncEngine:
             row = await cursor.fetchone()
             if row is None:
                 return None
+            
+            # Handle dict rows (e.g., psycopg dict_row)
+            if isinstance(row, dict):
+                # Return the first value in column order
+                return next(iter(row.values())) if row else None
+            
+            # Tuple-like row
             return row[0]
 
     async def execute(
@@ -269,15 +352,14 @@ class AsyncEngine:
             await conn.commit()
             return int(cursor.rowcount)
 
-    async def transaction(self) -> AsyncTransactionManager:
-        """Create a new async transaction context manager."""
-        if self._connection_manager._pool is None:
-            await self._connection_manager.initialize_pool()
-        pool = self._connection_manager._pool
-        conn = await self._connection_manager.adapter.acquire_connection_async(pool)
+    def transaction(self) -> AsyncTransactionManager:
+        """Create a new async transaction context manager.
+        
+        Returns an async context manager that acquires the connection
+        in __aenter__, allowing usage as: async with engine.transaction() as tx:
+        """
         return AsyncTransactionManager(
-            connection=conn,
             adapter=self._connection_manager.adapter,
             registry=self._registry,
-            pool=pool,
+            connection_manager=self._connection_manager,
         )

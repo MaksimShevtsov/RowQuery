@@ -22,11 +22,24 @@ class _TxState(Enum):
 
 
 def _rows_to_dicts(cursor: Any) -> list[dict[str, Any]]:
-    """Convert cursor results to list of dicts."""
+    """Convert cursor results to list of dicts.
+    
+    Handles both tuple-like rows and dict-like rows from different adapters.
+    """
     if cursor.description is None:
         return []
     columns = [desc[0] for desc in cursor.description]
-    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+    rows = cursor.fetchall()
+    if not rows:
+        return []
+    
+    # Check if rows are already dict-like
+    first_row = rows[0]
+    if isinstance(first_row, dict):
+        return [dict(row) for row in rows]
+    
+    # Tuple-like rows, zip with columns
+    return [dict(zip(columns, row, strict=True)) for row in rows]
 
 
 class TransactionManager:
@@ -124,6 +137,8 @@ class TransactionManager:
         self._state = _TxState.ROLLED_BACK
 
     def _check_active(self) -> None:
+        if self._state == _TxState.IDLE:
+            raise TransactionStateError("idle", "execute")
         if self._state == _TxState.COMMITTED:
             raise TransactionStateError("committed", "execute")
         if self._state == _TxState.ROLLED_BACK:
@@ -135,19 +150,27 @@ class AsyncTransactionManager:
 
     def __init__(
         self,
-        connection: Any,
         adapter: Any,
         registry: SQLRegistry,
+        connection_manager: Any,
+        connection: Any = None,
         pool: Any = None,
     ) -> None:
         self._connection = connection
         self._adapter = adapter
         self._registry = registry
         self._pool = pool
+        self._connection_manager = connection_manager
         self._paramstyle: str = adapter.paramstyle
         self._state = _TxState.IDLE
 
     async def __aenter__(self) -> AsyncTransactionManager:
+        # Acquire connection if not already provided
+        if self._connection is None:
+            if self._connection_manager._pool is None:
+                await self._connection_manager.initialize_pool()
+            self._pool = self._connection_manager._pool
+            self._connection = await self._adapter.acquire_connection_async(self._pool)
         self._state = _TxState.ACTIVE
         return self
 
@@ -195,7 +218,13 @@ class AsyncTransactionManager:
             return None
         columns = [desc[0] for desc in cursor.description]
         rows_raw = await cursor.fetchall()
-        rows = [dict(zip(columns, row, strict=True)) for row in rows_raw]
+        
+        # Handle dict rows vs tuple rows
+        if rows_raw and isinstance(rows_raw[0], dict):
+            rows = [dict(row) for row in rows_raw]
+        else:
+            rows = [dict(zip(columns, row, strict=True)) for row in rows_raw]
+        
         if not rows:
             return None
         return rows[0]
@@ -214,7 +243,12 @@ class AsyncTransactionManager:
             return []
         columns = [desc[0] for desc in cursor.description]
         rows_raw = await cursor.fetchall()
-        return [dict(zip(columns, row, strict=True)) for row in rows_raw]
+        
+        # Handle dict rows vs tuple rows
+        if rows_raw and isinstance(rows_raw[0], dict):
+            return [dict(row) for row in rows_raw]
+        else:
+            return [dict(zip(columns, row, strict=True)) for row in rows_raw]
 
     async def commit(self) -> None:
         """Explicitly commit the async transaction."""
@@ -233,6 +267,8 @@ class AsyncTransactionManager:
         self._state = _TxState.ROLLED_BACK
 
     def _check_active(self) -> None:
+        if self._state == _TxState.IDLE:
+            raise TransactionStateError("idle", "execute")
         if self._state == _TxState.COMMITTED:
             raise TransactionStateError("committed", "execute")
         if self._state == _TxState.ROLLED_BACK:
