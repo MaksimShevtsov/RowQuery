@@ -12,7 +12,9 @@ A SQL-first Python library for querying and mapping data across multiple databas
 ## Features
 
 - **Multi-Database Support**: SQLite, PostgreSQL, MySQL, Oracle with unified interface
-- **SQL-First Design**: Load queries from `.sql` files organized in namespaces
+- **SQL-First Design**: Load queries from `.sql` files organized in namespaces, or pass inline SQL directly
+- **Inline SQL**: Execute raw SQL strings alongside registry keys — no registry required for ad-hoc queries
+- **SQL Sanitization**: Configurable sanitizer strips comments, blocks statement stacking, and restricts SQL verbs
 - **Flexible Mapping**: Map results to dataclasses, Pydantic models, or plain classes
 - **Aggregate Mapping**: Reconstruct complex object graphs from joined queries (single-pass O(n))
 - **Transaction Management**: Context manager support with automatic rollback
@@ -56,10 +58,16 @@ config = ConnectionConfig(driver="sqlite", database="app.db")
 registry = SQLRegistry("sql/")
 engine = Engine.from_config(config, registry)
 
-# Execute and fetch
+# Registry key lookup (dot-separated namespace)
 user = engine.fetch_one("user.get_by_id", {"id": 1})
 users = engine.fetch_all("user.list_active")
 count = engine.fetch_scalar("user.count")
+
+# Inline SQL — pass a raw SQL string directly
+user = engine.fetch_one("SELECT * FROM users WHERE id = ?", 1)
+users = engine.fetch_all("SELECT * FROM users WHERE active = ?", True)
+count = engine.fetch_scalar("SELECT COUNT(*) FROM users")
+rows = engine.fetch_all("SELECT * FROM users WHERE id IN (?, ?)", [1, 2])
 ```
 
 ### 3. Map to Models
@@ -117,7 +125,29 @@ with engine.transaction() as tx:
     # Commits on exit, rolls back on exception
 ```
 
-### 6. Async Support
+### 6. SQL Sanitization
+```python
+from row_query import Engine, SQLSanitizer
+
+# Configure what inline SQL is permitted
+sanitizer = SQLSanitizer(
+    strip_comments=True,           # Remove -- and /* */ comments (default: True)
+    block_multiple_statements=True, # Reject "SELECT 1; DROP TABLE t" (default: True)
+    allowed_verbs=frozenset({"SELECT"}),  # Only allow SELECT statements (default: None = any)
+)
+
+engine = Engine.from_config(config, registry, sanitizer=sanitizer)
+
+# Inline SQL is sanitized before execution
+users = engine.fetch_all("SELECT * FROM users -- get all")  # comment stripped
+engine.execute("DROP TABLE users")  # raises SQLSanitizationError (verb not allowed)
+engine.execute("SELECT 1; DROP TABLE t")  # raises SQLSanitizationError (multiple statements)
+
+# Registry queries are always trusted and never sanitized
+users = engine.fetch_all("user.list_active")  # no sanitization applied
+```
+
+### 7. Async Support
 ```python
 from row_query import AsyncEngine, ConnectionConfig
 
@@ -125,12 +155,15 @@ config = ConnectionConfig(driver="sqlite", database="app.db")
 engine = AsyncEngine.from_config(config, registry)
 
 async def fetch_users():
+    # Registry key or inline SQL — both work
     users = await engine.fetch_all("user.list_active")
+    users = await engine.fetch_all("SELECT * FROM users WHERE active = ?", True)
     return users
 
 # Async transactions
 async with engine.transaction() as tx:
     await tx.execute("user.create", {"name": "Bob"})
+    await tx.execute("INSERT INTO audit (action) VALUES (?)", "user_created")
 ```
 
 ## Documentation

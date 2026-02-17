@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Inline SQL support**: All engine and transaction methods (`fetch_one`, `fetch_all`, `fetch_scalar`, `execute`) now accept raw SQL strings in addition to registry keys. A string containing whitespace is treated as inline SQL; a dot-separated identifier like `user.get_by_id` is resolved from the registry.
+- **Flexible parameter binding**: `params` argument now accepts `dict` (named), `tuple`/`list` (positional), or a single scalar value (automatically wrapped in a tuple). Previously only `dict | None` was accepted.
+- **`SQLSanitizer`** — configurable sanitizer applied to inline SQL before execution:
+  - `strip_comments` (default `True`): removes `--` line comments and `/* */` block comments while preserving string literals.
+  - `block_multiple_statements` (default `True`): rejects SQL containing a statement-terminating `;` followed by additional content (prevents query stacking attacks).
+  - `allowed_verbs` (default `None`): restricts the leading SQL keyword to a caller-supplied `frozenset` (e.g. `frozenset({"SELECT"})`). Registry queries are never sanitized.
+- **`SQLSanitizationError`** exception (subclass of `ExecutionError`) raised when a sanitization check fails.
+- **`is_raw_sql()`** and **`coerce_params()`** helpers exported from `row_query.core.params`.
+- 65 new unit tests covering all sanitizer behaviour (`tests/unit/test_sanitizer.py`).
+
 ## [0.1.0] - 2025-02-16
 
 ### Added
