@@ -117,8 +117,7 @@ def _check_verb(sql: str, allowed: frozenset[str]) -> None:
         verb = m.group(1).upper()
         if verb not in allowed:
             raise SQLSanitizationError(
-                f"SQL verb '{verb}' is not permitted; "
-                f"allowed: {sorted(allowed)}"
+                f"SQL verb '{verb}' is not permitted; allowed: {sorted(allowed)}"
             )
 
 
