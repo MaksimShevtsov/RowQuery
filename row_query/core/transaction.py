@@ -9,9 +9,10 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from row_query.core.exceptions import TransactionStateError
-from row_query.core.params import normalize_params
+from row_query.core.exceptions import ParameterBindingError, TransactionStateError
+from row_query.core.params import coerce_params, normalize_params, resolve_sql
 from row_query.core.registry import SQLRegistry
+from row_query.core.sanitizer import SQLSanitizer
 
 
 class _TxState(Enum):
@@ -51,11 +52,13 @@ class TransactionManager:
         adapter: Any,
         registry: SQLRegistry,
         pool: Any = None,
+        sanitizer: SQLSanitizer | None = None,
     ) -> None:
         self._connection = connection
         self._adapter = adapter
         self._registry = registry
         self._pool = pool
+        self._sanitizer = sanitizer
         self._paramstyle: str = adapter.paramstyle
         self._state = _TxState.IDLE
 
@@ -83,26 +86,40 @@ class TransactionManager:
 
     def execute(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
     ) -> int:
-        """Execute a write query within this transaction."""
+        """Execute a write query within this transaction.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
         self._check_active()
-        sql = self._registry.get(query_name)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = self._adapter.execute(self._connection, sql, params)
+        try:
+            cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         return int(cursor.rowcount)
 
     def fetch_one(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
     ) -> dict[str, Any] | None:
-        """Fetch a single row within transaction context."""
+        """Fetch a single row within transaction context.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
         self._check_active()
-        sql = self._registry.get(query_name)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = self._adapter.execute(self._connection, sql, params)
+        try:
+            cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         rows = _rows_to_dicts(cursor)
         if not rows:
             return None
@@ -110,14 +127,21 @@ class TransactionManager:
 
     def fetch_all(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
     ) -> list[dict[str, Any]]:
-        """Fetch all rows within transaction context."""
+        """Fetch all rows within transaction context.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
         self._check_active()
-        sql = self._registry.get(query_name)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = self._adapter.execute(self._connection, sql, params)
+        try:
+            cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         return _rows_to_dicts(cursor)
 
     def commit(self) -> None:
@@ -155,11 +179,13 @@ class AsyncTransactionManager:
         connection_manager: Any,
         connection: Any = None,
         pool: Any = None,
+        sanitizer: SQLSanitizer | None = None,
     ) -> None:
         self._connection = connection
         self._adapter = adapter
         self._registry = registry
         self._pool = pool
+        self._sanitizer = sanitizer
         self._connection_manager = connection_manager
         self._paramstyle: str = adapter.paramstyle
         self._state = _TxState.IDLE
@@ -194,26 +220,48 @@ class AsyncTransactionManager:
 
     async def execute(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
     ) -> int:
-        """Execute a write query within this async transaction."""
+        """Execute a write query within this async transaction.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
         self._check_active()
-        sql = self._registry.get(query_name)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = await self._adapter.execute_async(self._connection, sql, params)
+        try:
+            cursor = await self._adapter.execute_async(
+                self._connection,
+                sql,
+                coerce_params(params),
+            )
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         return int(cursor.rowcount)
 
     async def fetch_one(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
     ) -> dict[str, Any] | None:
-        """Fetch a single row within async transaction context."""
+        """Fetch a single row within async transaction context.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
         self._check_active()
-        sql = self._registry.get(query_name)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = await self._adapter.execute_async(self._connection, sql, params)
+        try:
+            cursor = await self._adapter.execute_async(
+                self._connection,
+                sql,
+                coerce_params(params),
+            )
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         if cursor.description is None:
             return None
         columns = [desc[0] for desc in cursor.description]
@@ -231,14 +279,25 @@ class AsyncTransactionManager:
 
     async def fetch_all(
         self,
-        query_name: str,
-        params: dict[str, Any] | None = None,
+        query: str,
+        params: Any = None,
     ) -> list[dict[str, Any]]:
-        """Fetch all rows within async transaction context."""
+        """Fetch all rows within async transaction context.
+
+        *query* may be a registry key or an inline SQL string.
+        *params* may be a dict, tuple/list, or scalar.
+        """
         self._check_active()
-        sql = self._registry.get(query_name)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = await self._adapter.execute_async(self._connection, sql, params)
+        try:
+            cursor = await self._adapter.execute_async(
+                self._connection,
+                sql,
+                coerce_params(params),
+            )
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         if cursor.description is None:
             return []
         columns = [desc[0] for desc in cursor.description]

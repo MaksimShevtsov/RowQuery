@@ -50,7 +50,7 @@ class SqliteSyncAdapter:
         params: dict[str, Any] | None = None,
     ) -> sqlite3.Cursor:
         """Execute SQL and return a cursor."""
-        return connection.execute(sql, params or {})
+        return connection.execute(sql, params if params is not None else {})
 
 
 class SqliteAsyncAdapter:
@@ -95,4 +95,4 @@ class SqliteAsyncAdapter:
         params: dict[str, Any] | None = None,
     ) -> Any:
         """Execute SQL asynchronously and return a cursor."""
-        return await connection.execute(sql, params or {})
+        return await connection.execute(sql, params if params is not None else {})

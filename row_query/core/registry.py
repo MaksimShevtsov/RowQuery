@@ -43,6 +43,17 @@ class SQLRegistry:
             parts[-1] = parts[-1].removesuffix(".sql")
             query_name = ".".join(parts)
 
+            # Validate that query_name doesn't contain whitespace
+            # This prevents ambiguity with inline SQL detection
+            if any(c.isspace() for c in query_name):
+                from row_query.core.exceptions import ExecutionError
+
+                raise ExecutionError(
+                    f"Registry key '{query_name}' from file '{sql_file}' contains "
+                    f"whitespace, which is not allowed. Registry keys must not contain "
+                    f"spaces, tabs, or newlines to avoid ambiguity with inline SQL."
+                )
+
             if query_name in self._queries:
                 raise DuplicateQueryError(
                     query_name,
