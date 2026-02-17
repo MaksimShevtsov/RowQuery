@@ -53,9 +53,8 @@ def _tokenize(sql: str) -> list[tuple[str, str]]:
             # Check for unterminated string
             if j >= n and (j == i + 1 or sql[j - 1] != "'"):
                 from row_query.core.exceptions import SQLSanitizationError
-                raise SQLSanitizationError(
-                    "Unterminated string literal detected in SQL"
-                )
+
+                raise SQLSanitizationError("Unterminated string literal detected in SQL")
             tokens.append(("string", sql[i:j]))
             last = j
             i = j
@@ -75,9 +74,8 @@ def _tokenize(sql: str) -> list[tuple[str, str]]:
             # Check for unterminated identifier
             if j >= n and (j == i + 1 or sql[j - 1] != '"'):
                 from row_query.core.exceptions import SQLSanitizationError
-                raise SQLSanitizationError(
-                    "Unterminated double-quoted identifier detected in SQL"
-                )
+
+                raise SQLSanitizationError("Unterminated double-quoted identifier detected in SQL")
             tokens.append(("identifier", sql[i:j]))
             last = j
             i = j
@@ -97,6 +95,7 @@ def _tokenize(sql: str) -> list[tuple[str, str]]:
             # Check for unterminated identifier
             if j >= n and (j == i + 1 or sql[j - 1] != "`"):
                 from row_query.core.exceptions import SQLSanitizationError
+
                 raise SQLSanitizationError(
                     "Unterminated backtick-quoted identifier detected in SQL"
                 )

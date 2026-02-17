@@ -47,6 +47,7 @@ class SQLRegistry:
             # This prevents ambiguity with inline SQL detection
             if any(c.isspace() for c in query_name):
                 from row_query.core.exceptions import ExecutionError
+
                 raise ExecutionError(
                     f"Registry key '{query_name}' from file '{sql_file}' contains "
                     f"whitespace, which is not allowed. Registry keys must not contain "
