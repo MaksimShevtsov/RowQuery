@@ -6,7 +6,7 @@ using RowQuery's aggregate mapping feature.
 """
 
 from row_query import Engine, ConnectionConfig, SQLRegistry
-from row_query.mapping import aggregate, ModelMapper
+from row_query.mapping import aggregate, ModelMapper, AggregateMapper
 from dataclasses import dataclass
 import tempfile
 import sqlite3
@@ -96,11 +96,8 @@ def main():
         .build()
     )
 
-    mapper = ModelMapper(plan=plan)
-
-    # Execute joined query and map in single pass
-    rows = engine.fetch_all("user.with_orders")
-    users = mapper.map_many(rows)
+    # Execute joined query and map in single pass using AggregateMapper
+    users = engine.fetch_all("user.with_orders", mapper=AggregateMapper(plan))
 
     print(f"Reconstructed {len(users)} user aggregates:\n")
     for user in users:
