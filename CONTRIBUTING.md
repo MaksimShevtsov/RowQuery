@@ -74,18 +74,61 @@ Pre-commit hooks run automatically on commit. To run manually:
 uv run pre-commit run --all-files
 ```
 
+## Branching Strategy
+
+**`main` is protected** — direct commits and force-pushes are blocked. All changes must go through a pull request from a feature branch.
+
+### Branch Naming
+
+Use a short numeric prefix followed by a kebab-case description:
+
+```
+NNN-short-description
+```
+
+Examples:
+```
+001-sql-projection-engine
+002-add-postgres-pooling
+003-fix-aggregate-null-handling
+```
+
+### Workflow
+
+```
+main (protected)
+ └── 001-my-feature        ← work here
+      └── commits...
+      └── open PR → review → merge into main
+```
+
+Never commit directly to `main`. Always:
+
+```bash
+git checkout main && git pull          # start from latest main
+git checkout -b 042-my-feature         # create feature branch
+# ... make changes ...
+git push -u origin 042-my-feature      # push feature branch
+gh pr create                           # open PR targeting main
+```
+
+Feature branches should be **rebased or merged up-to-date with `main`** before the PR can be merged (enforced by branch protection).
+
 ## Pull Request Process
 
-### 1. Fork and Branch
+### 1. Create a Feature Branch
 
-- Fork the repository
-- Create a feature branch: `git checkout -b feature/my-feature`
+```bash
+git checkout main && git pull
+git checkout -b NNN-short-description
+```
 
 ### 2. Make Changes
 
 - Write code following existing patterns
 - Add tests for new functionality
 - Update docstrings
+- Update `CHANGELOG.md` under `[Unreleased]`
 - Run quality checks locally
 
 ### 3. Commit
@@ -108,17 +151,22 @@ git commit -m "docs: add examples for async transactions"
 
 ### 4. Test
 
-- Ensure all tests pass
-- Verify coverage remains high
-- Test against multiple Python versions if possible
+- Ensure all tests pass: `uv run pytest`
+- Verify no lint errors: `uv run ruff check row_query/ tests/`
+- Verify formatting: `uv run ruff format --check row_query/ tests/`
+- Check types: `uv run mypy row_query/`
 
-### 5. Submit PR
+### 5. Open a PR
 
-- Push to your fork
-- Open pull request against `main`
-- Fill out PR template
+```bash
+git push -u origin NNN-short-description
+gh pr create --base main
+```
+
+- Fill out the PR template
 - Wait for CI to pass
 - Address review comments
+- Keep the branch up-to-date with `main` before merging
 
 ## Code Style Guidelines
 
