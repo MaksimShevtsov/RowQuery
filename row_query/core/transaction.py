@@ -232,7 +232,11 @@ class AsyncTransactionManager:
         sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         try:
-            cursor = await self._adapter.execute_async(self._connection, sql, coerce_params(params))
+            cursor = await self._adapter.execute_async(
+                self._connection,
+                sql,
+                coerce_params(params),
+            )
         except Exception as e:
             raise ParameterBindingError(label, str(e)) from e
         return int(cursor.rowcount)
@@ -251,7 +255,11 @@ class AsyncTransactionManager:
         sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         try:
-            cursor = await self._adapter.execute_async(self._connection, sql, coerce_params(params))
+            cursor = await self._adapter.execute_async(
+                self._connection,
+                sql,
+                coerce_params(params),
+            )
         except Exception as e:
             raise ParameterBindingError(label, str(e)) from e
         if cursor.description is None:
@@ -283,7 +291,11 @@ class AsyncTransactionManager:
         sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         try:
-            cursor = await self._adapter.execute_async(self._connection, sql, coerce_params(params))
+            cursor = await self._adapter.execute_async(
+                self._connection,
+                sql,
+                coerce_params(params),
+            )
         except Exception as e:
             raise ParameterBindingError(label, str(e)) from e
         if cursor.description is None:

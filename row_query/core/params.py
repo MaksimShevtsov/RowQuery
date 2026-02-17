@@ -97,8 +97,8 @@ def coerce_params(
 
 def resolve_sql(
     query: str,
-    registry: "SQLRegistry",
-    sanitizer: "SQLSanitizer | None" = None,
+    registry: SQLRegistry,
+    sanitizer: SQLSanitizer | None = None,
 ) -> tuple[str, str]:
     """Return ``(sql_text, label)`` for *query*.
 
