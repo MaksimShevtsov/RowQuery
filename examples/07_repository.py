@@ -27,9 +27,9 @@ class UserRepository(Repository[User]):
     """Repository for User entities"""
 
     def __init__(self, engine: Engine, registry: SQLRegistry):
-        super().__init__(engine)
+        # Pass ModelMapper to the base Repository class
+        super().__init__(engine, mapper=ModelMapper(User))
         self.registry = registry
-        self.mapper = ModelMapper(User)
 
     def find_by_id(self, user_id: int) -> Optional[User]:
         """Find user by ID"""

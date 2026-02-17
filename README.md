@@ -80,7 +80,7 @@ user = engine.fetch_one("user.get_by_id", {"id": 1}, mapper=mapper)
 
 ### 4. Aggregate Mapping (Reconstruct Object Graphs)
 ```python
-from row_query.mapping import aggregate, ModelMapper
+from row_query.mapping import aggregate, AggregateMapper
 from dataclasses import dataclass
 
 @dataclass
@@ -104,11 +104,8 @@ plan = (
     .build()
 )
 
-mapper = ModelMapper(plan=plan)
-
 # Execute joined query and map in single pass
-rows = engine.fetch_all("user.with_orders")
-users = mapper.map_many(rows)
+users = engine.fetch_all("user.with_orders", mapper=AggregateMapper(plan))
 ```
 
 ### 5. Transactions
