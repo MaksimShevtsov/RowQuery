@@ -9,22 +9,10 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from row_query.core.exceptions import TransactionStateError
-from row_query.core.params import coerce_params, is_raw_sql, normalize_params
+from row_query.core.exceptions import ParameterBindingError, TransactionStateError
+from row_query.core.params import coerce_params, normalize_params, resolve_sql
 from row_query.core.registry import SQLRegistry
 from row_query.core.sanitizer import SQLSanitizer
-
-
-def _resolve_sql(
-    query: str,
-    registry: SQLRegistry,
-    sanitizer: SQLSanitizer | None = None,
-) -> tuple[str, str]:
-    """Return ``(sql_text, label)`` for *query* (raw SQL or registry key)."""
-    if is_raw_sql(query):
-        sql = sanitizer.sanitize(query) if sanitizer is not None else query
-        return sql, "<inline>"
-    return registry.get(query), query
 
 
 class _TxState(Enum):
@@ -107,9 +95,12 @@ class TransactionManager:
         *params* may be a dict, tuple/list, or scalar.
         """
         self._check_active()
-        sql, _label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
+        try:
+            cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         return int(cursor.rowcount)
 
     def fetch_one(
@@ -123,9 +114,12 @@ class TransactionManager:
         *params* may be a dict, tuple/list, or scalar.
         """
         self._check_active()
-        sql, _label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
+        try:
+            cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         rows = _rows_to_dicts(cursor)
         if not rows:
             return None
@@ -142,9 +136,12 @@ class TransactionManager:
         *params* may be a dict, tuple/list, or scalar.
         """
         self._check_active()
-        sql, _label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
+        try:
+            cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         return _rows_to_dicts(cursor)
 
     def commit(self) -> None:
@@ -232,9 +229,12 @@ class AsyncTransactionManager:
         *params* may be a dict, tuple/list, or scalar.
         """
         self._check_active()
-        sql, _label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = await self._adapter.execute_async(self._connection, sql, coerce_params(params))
+        try:
+            cursor = await self._adapter.execute_async(self._connection, sql, coerce_params(params))
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         return int(cursor.rowcount)
 
     async def fetch_one(
@@ -248,9 +248,12 @@ class AsyncTransactionManager:
         *params* may be a dict, tuple/list, or scalar.
         """
         self._check_active()
-        sql, _label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = await self._adapter.execute_async(self._connection, sql, coerce_params(params))
+        try:
+            cursor = await self._adapter.execute_async(self._connection, sql, coerce_params(params))
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         if cursor.description is None:
             return None
         columns = [desc[0] for desc in cursor.description]
@@ -277,9 +280,12 @@ class AsyncTransactionManager:
         *params* may be a dict, tuple/list, or scalar.
         """
         self._check_active()
-        sql, _label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
-        cursor = await self._adapter.execute_async(self._connection, sql, coerce_params(params))
+        try:
+            cursor = await self._adapter.execute_async(self._connection, sql, coerce_params(params))
+        except Exception as e:
+            raise ParameterBindingError(label, str(e)) from e
         if cursor.description is None:
             return []
         columns = [desc[0] for desc in cursor.description]

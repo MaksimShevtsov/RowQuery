@@ -13,30 +13,12 @@ from row_query.core.exceptions import (
     MultipleRowsError,
     ParameterBindingError,
 )
-from row_query.core.params import coerce_params, is_raw_sql, normalize_params
+from row_query.core.params import coerce_params, normalize_params, resolve_sql
 from row_query.core.registry import SQLRegistry
 from row_query.core.sanitizer import SQLSanitizer
 from row_query.core.transaction import AsyncTransactionManager, TransactionManager
 
 T = TypeVar("T")
-
-
-def _resolve_sql(
-    query: str,
-    registry: SQLRegistry,
-    sanitizer: SQLSanitizer | None = None,
-) -> tuple[str, str]:
-    """Return ``(sql_text, label)`` for *query*.
-
-    If *query* is an inline SQL string (contains whitespace) it is returned
-    after optional sanitization.  Otherwise it is looked up in *registry* by
-    name (registry queries are trusted and never sanitized).  *label* is used
-    in error messages.
-    """
-    if is_raw_sql(query):
-        sql = sanitizer.sanitize(query) if sanitizer is not None else query
-        return sql, "<inline>"
-    return registry.get(query), query
 
 
 def _rows_to_dicts(cursor: Any) -> list[dict[str, Any]]:
@@ -134,7 +116,7 @@ class Engine:
         Returns None if zero rows match.
         Raises MultipleRowsError if more than one row matches.
         """
-        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         bound = coerce_params(params)
 
@@ -168,7 +150,7 @@ class Engine:
         *query* may be a registry key or an inline SQL string.
         *params* may be a dict, tuple/list, or scalar.
         """
-        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         bound = coerce_params(params)
 
@@ -194,7 +176,7 @@ class Engine:
         *query* may be a registry key or an inline SQL string.
         *params* may be a dict, tuple/list, or scalar.
         """
-        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         bound = coerce_params(params)
 
@@ -226,7 +208,7 @@ class Engine:
         *query* may be a registry key or an inline SQL string.
         *params* may be a dict, tuple/list, or scalar.
         """
-        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         bound = coerce_params(params)
 
@@ -300,7 +282,7 @@ class AsyncEngine:
         *query* may be a registry key or an inline SQL string.
         *params* may be a dict, tuple/list, or scalar.
         """
-        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         bound = coerce_params(params)
 
@@ -343,7 +325,7 @@ class AsyncEngine:
         *query* may be a registry key or an inline SQL string.
         *params* may be a dict, tuple/list, or scalar.
         """
-        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         bound = coerce_params(params)
 
@@ -378,7 +360,7 @@ class AsyncEngine:
         *query* may be a registry key or an inline SQL string.
         *params* may be a dict, tuple/list, or scalar.
         """
-        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         bound = coerce_params(params)
 
@@ -410,7 +392,7 @@ class AsyncEngine:
         *query* may be a registry key or an inline SQL string.
         *params* may be a dict, tuple/list, or scalar.
         """
-        sql, label = _resolve_sql(query, self._registry, self._sanitizer)
+        sql, label = resolve_sql(query, self._registry, self._sanitizer)
         sql = normalize_params(sql, self._paramstyle)
         bound = coerce_params(params)
 

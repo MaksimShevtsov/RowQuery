@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from row_query.core.registry import SQLRegistry
+    from row_query.core.sanitizer import SQLSanitizer
 
 # Matches :name but not ::typecast and not inside words
 # Negative lookbehind for : (handles ::), \w (handles mid-word colons)
@@ -61,6 +65,9 @@ def is_raw_sql(query: str) -> bool:
 
     Registry keys use dot-notation (e.g. ``users.get_by_id``) and never
     contain whitespace.  Any SQL statement will contain at least one space.
+
+    Note: Registry keys are validated during registration to ensure they do
+    not contain whitespace, preventing ambiguity.
     """
     return any(c.isspace() for c in query)
 
@@ -73,9 +80,43 @@ def coerce_params(
     * ``None`` / ``dict`` → returned as-is (named parameter binding).
     * ``tuple`` / ``list`` → converted to ``tuple`` (positional binding).
     * Any other scalar → wrapped in a single-element tuple.
+
+    Note on parameter styles:
+        Registry queries use `:name` style parameters (converted to driver format).
+        Inline SQL can use either `:name` or `?`-style placeholders depending on
+        the database driver. When using inline SQL with positional parameters,
+        ensure compatibility with your target database (SQLite uses `?`, PostgreSQL
+        uses `$1`, etc.).
     """
     if params is None or isinstance(params, dict):
         return params
     if isinstance(params, (tuple, list)):
         return tuple(params)
     return (params,)
+
+
+def resolve_sql(
+    query: str,
+    registry: "SQLRegistry",
+    sanitizer: "SQLSanitizer | None" = None,
+) -> tuple[str, str]:
+    """Return ``(sql_text, label)`` for *query*.
+
+    If *query* is an inline SQL string (contains whitespace) it is returned
+    after optional sanitization.  Otherwise it is looked up in *registry* by
+    name (registry queries are trusted and never sanitized).  *label* is used
+    in error messages.
+
+    Args:
+        query: Either a registry key (e.g. "users.get_by_id") or inline SQL.
+        registry: SQLRegistry instance for looking up named queries.
+        sanitizer: Optional SQLSanitizer applied only to inline SQL strings.
+
+    Returns:
+        Tuple of (sql_text, label) where label is "<inline>" for inline SQL
+        or the registry key for named queries.
+    """
+    if is_raw_sql(query):
+        sql = sanitizer.sanitize(query) if sanitizer is not None else query
+        return sql, "<inline>"
+    return registry.get(query), query

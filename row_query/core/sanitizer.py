@@ -21,10 +21,15 @@ _FIRST_KEYWORD = re.compile(r"^\s*(\w+)")
 
 
 def _tokenize(sql: str) -> list[tuple[str, str]]:
-    """Split *sql* into ``('string', …)`` and ``('code', …)`` tokens.
+    """Split *sql* into ``('string', …)``, ``('identifier', …)``, and ``('code', …)`` tokens.
 
     String literals (single-quoted, with ``''`` escapes) are preserved as-is.
+    Identifiers (double-quoted for PostgreSQL/MySQL ANSI_QUOTES, backtick-quoted
+    for MySQL) are also preserved to avoid stripping comment-like syntax inside them.
     Everything else is a ``'code'`` token.
+
+    Raises:
+        SQLSanitizationError: If an unterminated string literal or identifier is detected.
     """
     tokens: list[tuple[str, str]] = []
     i = 0
@@ -32,6 +37,7 @@ def _tokenize(sql: str) -> list[tuple[str, str]]:
     last = 0
 
     while i < n:
+        # Single-quoted string literal
         if sql[i] == "'":
             if i > last:
                 tokens.append(("code", sql[last:i]))
@@ -44,7 +50,57 @@ def _tokenize(sql: str) -> list[tuple[str, str]]:
                     j += 1  # '' escape — continue
                 else:
                     j += 1
+            # Check for unterminated string
+            if j >= n and (j == i + 1 or sql[j - 1] != "'"):
+                from row_query.core.exceptions import SQLSanitizationError
+                raise SQLSanitizationError(
+                    "Unterminated string literal detected in SQL"
+                )
             tokens.append(("string", sql[i:j]))
+            last = j
+            i = j
+        # Double-quoted identifier (PostgreSQL, MySQL ANSI_QUOTES)
+        elif sql[i] == '"':
+            if i > last:
+                tokens.append(("code", sql[last:i]))
+            j = i + 1
+            while j < n:
+                if sql[j] == '"':
+                    j += 1
+                    if j >= n or sql[j] != '"':
+                        break  # end of identifier
+                    j += 1  # "" escape — continue
+                else:
+                    j += 1
+            # Check for unterminated identifier
+            if j >= n and (j == i + 1 or sql[j - 1] != '"'):
+                from row_query.core.exceptions import SQLSanitizationError
+                raise SQLSanitizationError(
+                    "Unterminated double-quoted identifier detected in SQL"
+                )
+            tokens.append(("identifier", sql[i:j]))
+            last = j
+            i = j
+        # Backtick-quoted identifier (MySQL)
+        elif sql[i] == "`":
+            if i > last:
+                tokens.append(("code", sql[last:i]))
+            j = i + 1
+            while j < n:
+                if sql[j] == "`":
+                    j += 1
+                    if j >= n or sql[j] != "`":
+                        break  # end of identifier
+                    j += 1  # `` escape — continue
+                else:
+                    j += 1
+            # Check for unterminated identifier
+            if j >= n and (j == i + 1 or sql[j - 1] != "`"):
+                from row_query.core.exceptions import SQLSanitizationError
+                raise SQLSanitizationError(
+                    "Unterminated backtick-quoted identifier detected in SQL"
+                )
+            tokens.append(("identifier", sql[i:j]))
             last = j
             i = j
         else:
@@ -88,10 +144,10 @@ def _strip_comments_in_code(code: str) -> str:
 
 
 def _strip_comments(sql: str) -> str:
-    """Remove SQL comments while preserving string literals."""
+    """Remove SQL comments while preserving string literals and identifiers."""
     parts: list[str] = []
     for kind, content in _tokenize(sql):
-        if kind == "string":
+        if kind in ("string", "identifier"):
             parts.append(content)
         else:
             parts.append(_strip_comments_in_code(content))
@@ -101,7 +157,7 @@ def _strip_comments(sql: str) -> str:
 def _check_single_statement(sql: str) -> None:
     """Raise if *sql* contains a semicolon followed by non-whitespace content."""
     for kind, content in _tokenize(sql):
-        if kind == "string":
+        if kind in ("string", "identifier"):
             continue
         for i, ch in enumerate(content):
             if ch == ";" and content[i + 1 :].strip():
@@ -132,6 +188,22 @@ class SQLSanitizer:
 
     Applied only to raw SQL passed directly to engine/transaction methods.
     Registry-loaded queries are always trusted and never sanitized.
+
+    **IMPORTANT SECURITY WARNING:**
+        This sanitizer does NOT protect against SQL injection if user-provided
+        data is concatenated directly into SQL strings. You MUST use parameterized
+        queries with placeholders (e.g., `?` or `:name`) to prevent SQL injection.
+        The sanitizer only provides defense-in-depth measures (comment stripping,
+        statement blocking, verb restrictions) but is NOT a substitute for proper
+        parameterization.
+
+        Example of UNSAFE code:
+            # NEVER DO THIS - vulnerable to SQL injection
+            engine.fetch_all(f"SELECT * FROM users WHERE name = '{user_input}'")
+
+        Example of SAFE code:
+            # ALWAYS USE THIS - parameterized query
+            engine.fetch_all("SELECT * FROM users WHERE name = ?", user_input)
 
     Attributes:
         strip_comments: Strip ``--`` and ``/* */`` comments before execution.
