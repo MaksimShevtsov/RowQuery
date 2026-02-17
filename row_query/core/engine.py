@@ -170,7 +170,7 @@ class Engine:
             # Handle dict rows (e.g., psycopg dict_row)
             if isinstance(row, dict):
                 # Return the first value in column order
-                return next(iter(row.values())) if row else None
+                return next(iter(row.values()))
             
             # Tuple-like row
             return row[0]
@@ -329,7 +329,7 @@ class AsyncEngine:
             # Handle dict rows (e.g., psycopg dict_row)
             if isinstance(row, dict):
                 # Return the first value in column order
-                return next(iter(row.values())) if row else None
+                return next(iter(row.values()))
             
             # Tuple-like row
             return row[0]
