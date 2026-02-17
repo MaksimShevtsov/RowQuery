@@ -2,6 +2,11 @@
 
 Manages versioned SQL migration files with numeric ordering,
 incremental execution, and tracking of applied versions.
+
+NOTE: Current implementation uses SQLite-specific SQL syntax
+(datetime('now'), ? placeholders). For production use with other
+databases, migrations should be adapted to use backend-specific
+DDL and parameter styles.
 """
 
 from __future__ import annotations
