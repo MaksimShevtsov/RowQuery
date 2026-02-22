@@ -22,7 +22,7 @@ RowQuery's core dependency is Pydantic >=2.0.0. Database-specific drivers are op
 - **Not an ORM.** RowQuery does not generate SQL from Python model definitions. You write all SQL yourself.
 - **Not a schema generator.** RowQuery does not create database tables from class definitions. Use migrations or external tools for DDL.
 - **Not a migration-only tool.** While RowQuery includes a `MigrationManager`, it is a convenience feature, not the library's primary purpose.
-- **Not a connection pooling library.** RowQuery delegates pooling to the underlying database drivers (psycopg, aiomysql, oracledb). It manages connection lifecycle but does not implement its own pool.
+- **Not a full-featured connection pooling library.** RowQuery's adapters currently use a very simple built-in pool implemented as an in-memory `list` of connections (for example, `create_pool()` returns a list and `acquire_connection()` does `pool.pop()`). This is intended only as a lightweight convenience; it lacks the robustness, configuration options, and advanced features of production-grade pooling solutions provided by database drivers or external pooling tools.
 - **Not a query builder with DSL syntax.** There is no fluent API for constructing SQL. You pass SQL strings directly or load them from `.sql` files via `SQLRegistry`.
 - **Not a data validation framework.** RowQuery maps query results to objects but does not validate business rules or enforce constraints beyond what the database itself provides.
 
@@ -32,12 +32,12 @@ RowQuery's core dependency is Pydantic >=2.0.0. Database-specific drivers are op
 
 Install RowQuery with no database-specific drivers:
 
-```python
+```bash
 # Using uv (recommended)
-# uv add row-query
+# uv add rowquery
 
 # Using pip
-# pip install row-query
+# pip install rowquery
 ```
 
 The core installation includes only the `pydantic` dependency and the SQLite sync adapter (which uses Python's built-in `sqlite3` module).
@@ -246,8 +246,8 @@ sqlite_file_config = ConnectionConfig(driver="sqlite", database="/path/to/mydb.s
 | `password` | `str \| None` | `None` | Authentication password |
 | `database` | `str` | (required) | Database name or path (`:memory:` for SQLite in-memory) |
 | `pool_size` | `int` | `5` | Maximum connections in pool |
-| `pool_timeout` | `int` | `30` | Seconds to wait for a connection from pool |
-| `pool_recycle` | `int` | `1800` | Seconds before recycling idle connections |
+| `pool_timeout` | `int` | `30` | Reserved for future use. Currently has no effect at runtime. |
+| `pool_recycle` | `int` | `1800` | Reserved for future use. Currently has no effect at runtime. |
 | `extra` | `dict[str, Any]` | `{}` | Additional driver-specific parameters |
 
 See the Database Backends section for backend-specific ConnectionConfig examples.

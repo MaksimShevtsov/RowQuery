@@ -13,7 +13,7 @@
 - [Transactions](llms-full.txt#transactions): Sync and async transaction management
 - [Migrations](llms-full.txt#migrations): Schema migration with MigrationManager
 - [Repository Pattern](llms-full.txt#repository-pattern): DDD-style repository base classes
-- [Exception Reference](llms-full.txt#exception-reference): Complete exception hierarchy (18 classes)
+- [Exception Reference](llms-full.txt#exception-reference): Complete exception hierarchy
 - [Terminology Glossary](llms-full.txt#terminology-glossary): Canonical terms used in RowQuery
 
 ## Optional
