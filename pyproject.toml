@@ -1,6 +1,6 @@
 [project]
 name = "rowquery"
-version = "0.1.1"
+version = "0.1.2"
 description = "A SQL-first Python library for querying and mapping data across multiple database backends."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-02-22
+## [0.1.2] - 2026-02-22
 
 ### Added
 - **Inline SQL support**: All engine and transaction methods (`fetch_one`, `fetch_all`, `fetch_scalar`, `execute`) now accept raw SQL strings in addition to registry keys. A string containing whitespace is treated as inline SQL; a dot-separated identifier like `user.get_by_id` is resolved from the registry.
@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for Python 3.10, 3.11, 3.12, and 3.13
 - 125 unit, contract, and integration tests
 
-[Unreleased]: https://github.com/maksim-shevtsov/RowQuery/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/maksim-shevtsov/RowQuery/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/maksim-shevtsov/RowQuery/releases/tag/v0.1.2
 [0.1.1]: https://github.com/maksim-shevtsov/RowQuery/releases/tag/v0.1.1
 [0.1.0]: https://github.com/maksim-shevtsov/RowQuery/releases/tag/v0.1.0

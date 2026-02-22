@@ -4,7 +4,7 @@
 
 ## What Is RowQuery
 
-RowQuery is a Python library for executing raw SQL queries against multiple database backends with structured result mapping. It is currently in alpha (v0.1.1) and requires Python >=3.10.
+RowQuery is a Python library for executing raw SQL queries against multiple database backends with structured result mapping. It is currently in alpha (v0.1.2) and requires Python >=3.10.
 
 Key features:
 
