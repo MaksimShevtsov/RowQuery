@@ -66,3 +66,8 @@ uv run mypy row_query/     # Type check (strict mode)
 ## Active Technologies
 - Python >=3.10 + pydantic >=2.0.0 (core); psycopg >=3.1.0, aiosqlite, aiomysql, oracledb (optional per-backend)
 - SQLite, PostgreSQL, MySQL, Oracle via adapter pattern
+- Python >=3.10 (documented library) + N/A (documentation-only feature; no new code dependencies) (001-llm-docs)
+- N/A (static markdown/text files in repository) (001-llm-docs)
+
+## Recent Changes
+- 001-llm-docs: Added Python >=3.10 (documented library) + N/A (documentation-only feature; no new code dependencies)
