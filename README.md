@@ -3,8 +3,8 @@
 [![PyPI version](https://badge.fury.io/py/rowquery.svg)](https://pypi.org/project/rowquery/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/rowquery.svg)](https://pypi.org/project/rowquery/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://github.com/maksim-shevtsov/RowQuery/workflows/Tests/badge.svg)](https://github.com/maksim-shevtsov/RowQuery/actions)
-[![codecov](https://codecov.io/gh/maksim-shevtsov/RowQuery/branch/main/graph/badge.svg)](https://codecov.io/gh/maksim-shevtsov/RowQuery)
+[![Tests](https://github.com/MaksimShevtsov/RowQuery/actions/workflows/test.yml/badge.svg)](https://github.com/MaksimShevtsov/RowQuery/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/MaksimShevtsov/RowQuery/branch/main/graph/badge.svg)](https://codecov.io/gh/MaksimShevtsov/RowQuery)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 A SQL-first Python library for querying and mapping data across multiple database backends.
