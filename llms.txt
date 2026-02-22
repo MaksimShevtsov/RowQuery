@@ -1,0 +1,21 @@
+# RowQuery
+
+> SQL-first query execution and projection engine for Python. Supports SQLite, PostgreSQL, MySQL, and Oracle via adapter pattern. Requires Python >=3.10.
+
+## Documentation
+
+- [What Is RowQuery](llms-full.txt#what-is-rowquery): One-paragraph overview, key features, and status
+- [Installation](llms-full.txt#installation): Core install and optional database backend extras
+- [Quick Start](llms-full.txt#quick-start): Sync and async examples with SQLite in-memory
+- [Core Concepts](llms-full.txt#core-concepts): Engine, ConnectionConfig, SQLRegistry, SQLSanitizer
+- [Database Backends](llms-full.txt#database-backends): SQLite, PostgreSQL, MySQL, Oracle adapter configuration
+- [Result Mapping](llms-full.txt#result-mapping): ModelMapper for single entities, AggregateMapper for complex object graphs
+- [Transactions](llms-full.txt#transactions): Sync and async transaction management
+- [Migrations](llms-full.txt#migrations): Schema migration with MigrationManager
+- [Repository Pattern](llms-full.txt#repository-pattern): DDD-style repository base classes
+- [Exception Reference](llms-full.txt#exception-reference): Complete exception hierarchy
+- [Terminology Glossary](llms-full.txt#terminology-glossary): Canonical terms used in RowQuery
+
+## Optional
+
+- [What RowQuery Is Not](llms-full.txt#what-rowquery-is-not): Scope boundaries and non-features
