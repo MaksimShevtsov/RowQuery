@@ -92,9 +92,58 @@ class AggregateMappingBuilder:
         prefix: str,
         key: str,
     ) -> AggregateMappingBuilder:
-        """Declare a child collection (one-to-many)."""
+        """Declare a child collection (one-to-many).
+
+        Use a dotted *name* to nest a collection inside a previously declared
+        one, e.g. ``.collection("lines", Line, ...)`` followed by
+        ``.collection("lines.discounts", Discount, ...)``. Children are
+        deduplicated per parent instance by their *key* column.
+        """
         self._collections.append((name, entity_class, prefix, key))
         return self
+
+    def _build_collection_plans(self, all_prefixes: list[str]) -> list[CollectionPlan]:
+        """Compile declared collections into a tree of CollectionPlans.
+
+        A dotted *name* (``"lines.discounts"``) nests the collection inside
+        the already-declared collection at the parent path (``"lines"``).
+        """
+        declared: dict[str, tuple[type, str, str]] = {}
+        child_paths: dict[str | None, list[str]] = {None: []}
+
+        for path, cls, prefix, key in self._collections:
+            if path in declared:
+                raise PlanCompilationError(f"Collection '{path}' is declared more than once")
+            parent, _, attr = path.rpartition(".")
+            parent_path = parent or None
+            if not attr or (parent_path is not None and parent_path not in declared):
+                raise PlanCompilationError(
+                    f"Collection '{path}': parent collection '{parent}' must be declared first"
+                )
+            if prefix in all_prefixes:
+                raise PlanCompilationError(
+                    f"Duplicate prefix '{prefix}': each entity must have a unique prefix"
+                )
+            all_prefixes.append(prefix)
+            declared[path] = (cls, prefix, key)
+            child_paths[parent_path].append(path)
+            child_paths[path] = []
+
+        def compile_plan(path: str) -> CollectionPlan:
+            cls, prefix, key = declared[path]
+            children = [compile_plan(child) for child in child_paths[path]]
+            nested_names = {child.attribute_name for child in children}
+            field_map = {n: n for n in _get_field_names(cls) if n not in nested_names}
+            return CollectionPlan(
+                attribute_name=path.rpartition(".")[2],
+                entity_plan=EntityPlan(
+                    target_class=cls, prefix=prefix, key_field=key, field_map=field_map
+                ),
+                children=children,
+                path=path,
+            )
+
+        return [compile_plan(path) for path in child_paths[None]]
 
     def reference(
         self,
@@ -128,11 +177,24 @@ class AggregateMappingBuilder:
         if self._key_field is None:
             raise PlanCompilationError("Root entity must have a key field set via .key()")
 
+        # Only collections can be nested; references and value objects live on the root.
+        for kind, names in (
+            ("reference", [name for name, *_ in self._references]),
+            ("value object", [name for name, *_ in self._value_objects]),
+        ):
+            for name in names:
+                if "." in name:
+                    raise PlanCompilationError(
+                        f"{kind.capitalize()} '{name}': nested {kind}s are not supported; "
+                        f"{kind}s can only be declared on the aggregate root "
+                        f"(only collections accept dotted paths)"
+                    )
+
         # Build root field map
         # Collect names that are populated by collections/references/value_objects
         composite_names = set()
         for name, *_ in self._collections:
-            composite_names.add(name)
+            composite_names.add(name.split(".", 1)[0])
         for name, *_ in self._references:
             composite_names.add(name)
         for name, *_ in self._value_objects:
@@ -154,29 +216,7 @@ class AggregateMappingBuilder:
         # Validate prefixes are unique
         all_prefixes = [self._prefix]
 
-        # Build collection plans
-        collection_plans = []
-        for name, cls, prefix, key in self._collections:
-            if prefix in all_prefixes:
-                raise PlanCompilationError(
-                    f"Duplicate prefix '{prefix}': each entity must have a unique prefix"
-                )
-            all_prefixes.append(prefix)
-
-            child_field_map = {n: n for n in _get_field_names(cls)}
-            entity_plan = EntityPlan(
-                target_class=cls,
-                prefix=prefix,
-                key_field=key,
-                field_map=child_field_map,
-            )
-            collection_plans.append(
-                CollectionPlan(
-                    attribute_name=name,
-                    entity_plan=entity_plan,
-                    children=[],
-                )
-            )
+        collection_plans = self._build_collection_plans(all_prefixes)
 
         # Build reference plans
         reference_plans = []

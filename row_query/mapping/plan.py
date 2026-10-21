@@ -26,6 +26,11 @@ class CollectionPlan:
     attribute_name: str
     entity_plan: EntityPlan
     children: list[CollectionPlan] = field(default_factory=list)
+    path: str = ""  # dotted path from the root, e.g. "lines.discounts"
+
+    @property
+    def display_path(self) -> str:
+        return self.path or self.attribute_name
 
 
 @dataclass(frozen=True)
