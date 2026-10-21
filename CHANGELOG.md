@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project URLs in `pyproject.toml` point to the correct GitHub repository.
 
 ### Added
-- **Nested collections** in aggregate mappings: `.collection("lines.discounts", Discount, prefix="disc__", key="id")` nests a collection inside a previously declared one, at any depth. Children are deduplicated per parent instance and strict mode validates nested columns and prefixes. `CollectionPlan.children` is now populated and used by `AggregateMapper`.
+- **Nested collections** in aggregate mappings: `.collection("lines.discounts", Discount, prefix="disc__", key="id")` nests a collection inside a previously declared one, at any depth. Children are deduplicated per parent instance; strict mode validates nested columns, prefixes and identity key columns (root, collections at every level, references) and reports collections by their full path. Dotted paths for `reference()` / `value_object()` are rejected at `build()`. `CollectionPlan.children` is now populated and used by `AggregateMapper`.
 - Portable positional placeholders: `?` is converted to `%s` (PostgreSQL, MySQL) or `:1, :2, ...` (Oracle); `??` is a literal `?` (e.g. the PostgreSQL JSONB operator). SQL already using native `%s` / `%(name)s` placeholders is passed through unchanged.
 - `QueryExecutionError` (database rejected the query) and `IntegrityError` (constraint violation), both carrying the driver exception as `__cause__`; `PoolTimeoutError`.
 - `Engine.close()` / `AsyncEngine.close()`; `ConnectionManager.acquire()` / `release()`.

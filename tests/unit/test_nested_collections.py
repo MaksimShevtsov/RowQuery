@@ -205,6 +205,75 @@ class TestMapper:
         assert orders[0].lines[0].discounts[0].percent == 5
 
 
+class TestReviewFollowUps:
+    """Fixes requested in the review of PR #16."""
+
+    @pytest.mark.parametrize("kind", ["reference", "value_object"])
+    def test_dotted_reference_or_value_object_rejected(self, kind: str) -> None:
+        @dataclass
+        class Product:
+            id: int
+
+        builder = (
+            aggregate(Order, prefix="order__")
+            .key("id")
+            .collection("lines", Line, prefix="line__", key="id")
+        )
+        if kind == "reference":
+            builder.reference("lines.product", Product, prefix="p__", key="id")
+        else:
+            builder.value_object("lines.product", Product, prefix="p__")
+        with pytest.raises(PlanCompilationError, match="only be declared on the aggregate root"):
+            builder.build()
+
+    def test_strict_requires_collection_key_column(self) -> None:
+        @dataclass
+        class RefLine:
+            id: int
+            sku: str
+            discounts: list[Discount] = field(default_factory=list)
+
+        plan = (
+            aggregate(Order, prefix="order__")
+            .key("id")
+            .auto_fields()
+            .collection("lines", RefLine, prefix="line__", key="line_ref")
+            .collection("lines.discounts", Discount, prefix="disc__", key="id")
+            .strict()
+            .build()
+        )
+        # line__line_ref is not selected: without the check the collection would stay empty.
+        with pytest.raises(StrictModeViolation, match="key column 'line__line_ref'.*'lines'"):
+            AggregateMapper(plan).map_many([row(1, 10, "A", 100, 5)])
+
+    def test_strict_requires_nested_key_column(self) -> None:
+        bad = row(1, 10, "A", 100, 5)
+        del bad["disc__id"]
+        with pytest.raises(
+            StrictModeViolation, match="'disc__id' for collection 'lines.discounts'"
+        ):
+            AggregateMapper(order_plan(strict=True)).map_many([bad])
+
+    def test_strict_requires_root_key_column(self) -> None:
+        bad = row(1, 10, "A", 100, 5)
+        del bad["order__id"]
+        with pytest.raises(StrictModeViolation, match="key column 'order__id'"):
+            AggregateMapper(order_plan(strict=True)).map_many([bad])
+
+    def test_strict_messages_use_full_path(self) -> None:
+        bad = row(1, 10, "A", 100, 5)
+        del bad["disc__percent"]
+        with pytest.raises(
+            StrictModeViolation, match="collection 'lines.discounts' field 'percent'"
+        ):
+            AggregateMapper(order_plan(strict=True)).map_many([bad])
+
+    def test_plan_records_paths(self) -> None:
+        lines = order_plan().collection_plans[0]
+        assert lines.path == "lines"
+        assert lines.children[0].path == "lines.discounts"
+
+
 class TestEndToEnd:
     def test_three_table_join_through_engine(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
         from row_query.core.connection import ConnectionConfig

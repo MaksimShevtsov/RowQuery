@@ -160,6 +160,25 @@ class AggregateMapper(Generic[T]):
         row_columns = set(sample_row.keys())
         plan = self._plan
 
+        # Check identity key columns (a missing key silently empties a collection)
+        root_key = plan.root_plan.prefix + plan.root_plan.key_field
+        if root_key not in row_columns:
+            raise StrictModeViolation(
+                f"Missing key column '{root_key}' for root {plan.root_plan.target_class.__name__}"
+            )
+        for coll in _walk_collections(plan.collection_plans):
+            key_col = coll.entity_plan.prefix + coll.entity_plan.key_field
+            if key_col not in row_columns:
+                raise StrictModeViolation(
+                    f"Missing key column '{key_col}' for collection '{coll.display_path}'"
+                )
+        for ref in plan.reference_plans:
+            key_col = ref.entity_plan.prefix + ref.entity_plan.key_field
+            if key_col not in row_columns:
+                raise StrictModeViolation(
+                    f"Missing key column '{key_col}' for reference '{ref.attribute_name}'"
+                )
+
         # Check root fields
         for attr_name, col_name in plan.root_plan.field_map.items():
             full_col = plan.root_plan.prefix + col_name
@@ -176,7 +195,7 @@ class AggregateMapper(Generic[T]):
                 if full_col not in row_columns:
                     raise StrictModeViolation(
                         f"Missing mapped column '{full_col}' for collection "
-                        f"'{coll.attribute_name}' field '{attr_name}'"
+                        f"'{coll.display_path}' field '{attr_name}'"
                     )
 
         # Check reference fields

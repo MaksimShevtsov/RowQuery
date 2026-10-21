@@ -636,7 +636,7 @@ orders = engine.fetch_all(
 - References and value objects are set once per root (first non-NULL occurrence).
 - Rows with NULL root key are silently skipped.
 - `map_one()` raises `NotImplementedError` — use `map_many()` only.
-- In strict mode, raises `StrictModeViolation` if columns are missing or unknown prefix groups appear.
+- In strict mode, raises `StrictModeViolation` if mapped or key columns (root, collections at every level, references) are missing, or unknown prefix groups appear.
 
 ## Transactions
 

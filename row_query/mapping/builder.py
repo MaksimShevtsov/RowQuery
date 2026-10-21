@@ -140,6 +140,7 @@ class AggregateMappingBuilder:
                     target_class=cls, prefix=prefix, key_field=key, field_map=field_map
                 ),
                 children=children,
+                path=path,
             )
 
         return [compile_plan(path) for path in child_paths[None]]
@@ -175,6 +176,19 @@ class AggregateMappingBuilder:
         # Validate key field
         if self._key_field is None:
             raise PlanCompilationError("Root entity must have a key field set via .key()")
+
+        # Only collections can be nested; references and value objects live on the root.
+        for kind, names in (
+            ("reference", [name for name, *_ in self._references]),
+            ("value object", [name for name, *_ in self._value_objects]),
+        ):
+            for name in names:
+                if "." in name:
+                    raise PlanCompilationError(
+                        f"{kind.capitalize()} '{name}': nested {kind}s are not supported; "
+                        f"{kind}s can only be declared on the aggregate root "
+                        f"(only collections accept dotted paths)"
+                    )
 
         # Build root field map
         # Collect names that are populated by collections/references/value_objects
