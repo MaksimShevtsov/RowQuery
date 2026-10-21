@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-21
+
 ### Fixed
 - **Transaction state no longer leaks between calls.** Connections are rolled back when they return to the pool, so reads no longer leave PostgreSQL sessions `idle in transaction`, MySQL `REPEATABLE READ` readers no longer see a stale snapshot, and a failed statement no longer leaves a PostgreSQL connection in the `current transaction is aborted` state.
 - **Real connection pooling.** The pool now waits for a free connection (up to `pool_timeout`) instead of raising `RuntimeError` when exhausted, opens connections lazily, honours `pool_recycle`, and discards connections that fail the reset or are reported broken. `Engine` can be used from several threads (SQLite connections are opened with `check_same_thread=False`), and `asyncio.gather` with more tasks than `pool_size` works.
@@ -76,7 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for Python 3.10, 3.11, 3.12, and 3.13
 - 125 unit, contract, and integration tests
 
-[Unreleased]: https://github.com/MaksimShevtsov/RowQuery/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/MaksimShevtsov/RowQuery/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MaksimShevtsov/RowQuery/releases/tag/v0.2.0
 [0.1.2]: https://github.com/MaksimShevtsov/RowQuery/releases/tag/v0.1.2
 [0.1.1]: https://github.com/MaksimShevtsov/RowQuery/releases/tag/v0.1.1
 [0.1.0]: https://github.com/MaksimShevtsov/RowQuery/releases/tag/v0.1.0
