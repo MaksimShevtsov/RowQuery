@@ -8,14 +8,18 @@ from pathlib import Path
 import pytest
 
 from row_query.core.connection import ConnectionConfig, ConnectionManager
+from row_query.core.engine import Engine
 from row_query.core.exceptions import (
+    MigrationExecutionError,
     MigrationFileError,
+    PoolTimeoutError,
     SQLSanitizationError,
     StrictModeViolation,
 )
 from row_query.core.lexer import split_statements
 from row_query.core.migration import MigrationManager
 from row_query.core.params import bind_params, normalize_params
+from row_query.core.registry import SQLRegistry
 from row_query.core.sanitizer import SQLSanitizer
 from row_query.mapping.aggregate import AggregateMapper
 from row_query.mapping.builder import aggregate
@@ -272,3 +276,115 @@ class TestAdapterHelpers:
         parsed = conninfo_to_dict(_build_conninfo(config))
         assert parsed["password"] == "p a's\\s"
         assert parsed["sslmode"] == "disable"
+
+
+class TestSecondReview:
+    """Regressions reported in the second review of PR #15."""
+
+    def test_native_pyformat_with_dict_is_passed_through(self) -> None:
+        sql = "SELECT * FROM t WHERE id = %(id)s AND name LIKE 'a%%'"
+        assert bind_params(sql, {"id": 1}, "pyformat", "format") == (sql, {"id": 1})
+
+    def test_native_format_with_jsonb_operator_is_passed_through(self) -> None:
+        sql = "SELECT * FROM t WHERE data ? 'k' AND id = %s"
+        assert bind_params(sql, (1,), "pyformat", "format") == (sql, (1,))
+
+    def test_double_qmark_is_a_literal_question_mark(self) -> None:
+        sql, params = bind_params(
+            "SELECT * FROM t WHERE data ?? 'k' AND id = ?", (1,), "pyformat", "format"
+        )
+        assert sql == "SELECT * FROM t WHERE data ? 'k' AND id = %s"
+        assert params == (1,)
+
+    def test_postgres_backslash_is_not_an_escape(self) -> None:
+        sql = r"SELECT * FROM t WHERE path = 'C:\' AND id = :id"
+        converted, params = bind_params(sql, {"id": 1}, "pyformat", "format", False)
+        assert converted == r"SELECT * FROM t WHERE path = 'C:\' AND id = %(id)s"
+        assert params == {"id": 1}
+
+    def test_mysql_backslash_is_an_escape(self) -> None:
+        sql = r"SELECT * FROM t WHERE a = 'it\'s :x' AND id = :id"
+        converted, _ = bind_params(sql, {"id": 1}, "pyformat", "format", True)
+        assert converted == r"SELECT * FROM t WHERE a = 'it\'s :x' AND id = %(id)s"
+
+    def test_nested_block_comment_rejected(self) -> None:
+        sql = "SELECT 1 /* /* */ ' */ ; DROP TABLE t; -- '"
+        for strip in (True, False):
+            with pytest.raises(SQLSanitizationError, match="Nested block comments"):
+                SQLSanitizer(strip_comments=strip).sanitize(sql)
+
+    def test_sqlite_migration_is_atomic(self, tmp_path: Path, manager: ConnectionManager) -> None:
+        mig = tmp_path / "migrations"
+        mig.mkdir()
+        (mig / "001_x.sql").write_text(
+            "CREATE TABLE a (id INT); CREATE TABLE b (id INT); INSERT INTO nope VALUES (1);",
+            encoding="utf-8",
+        )
+        with pytest.raises(MigrationExecutionError):
+            MigrationManager(mig, manager).apply()
+        with manager.get_connection() as conn:
+            names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        assert not {"a", "b"} & names
+
+    def test_sqlite_transaction_rolls_back_ddl(self, tmp_path: Path) -> None:
+        engine = Engine.from_config(
+            ConnectionConfig(driver="sqlite", database=str(tmp_path / "t.db"), pool_size=1),
+            SQLRegistry(tmp_path / "sql"),
+        )
+        with pytest.raises(RuntimeError), engine.transaction() as tx:
+            tx.execute("CREATE TABLE ddl_tx (id INTEGER)")
+            raise RuntimeError("abort")
+        assert engine.fetch_scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = 'ddl_tx'") == 0
+        engine.close()
+
+    def test_renamed_migration_not_reapplied(
+        self, tmp_path: Path, manager: ConnectionManager
+    ) -> None:
+        mig = tmp_path / "migrations"
+        mig.mkdir()
+        (mig / "9_x.sql").write_text("CREATE TABLE x (id INTEGER)", encoding="utf-8")
+        MigrationManager(mig, manager).apply()
+        (mig / "9_x.sql").rename(mig / "009_x.sql")
+        mm = MigrationManager(mig, manager)
+        assert mm.pending() == []
+        assert mm.apply() == []
+
+    def test_release_after_close_pool_does_not_leak_into_new_pool(self) -> None:
+        cm = ConnectionManager(
+            ConnectionConfig(driver="sqlite", database=":memory:", pool_size=1, pool_timeout=0.05)
+        )
+        borrowed = cm.acquire()
+        cm.close_pool()
+        cm.release(borrowed)  # closed, not handed to the new pool
+        first = cm.acquire()
+        assert first is not borrowed
+        with pytest.raises(PoolTimeoutError):
+            cm.acquire()
+        cm.release(first)
+        cm.close_pool()
+
+    def test_mysql_liveness_check_is_local(self) -> None:
+        from row_query.adapters.mysql import MysqlSyncAdapter
+
+        class CextConn:
+            def __init__(self, closed: bool) -> None:
+                self.closed = closed
+
+            def is_closed(self) -> bool:
+                return self.closed
+
+            def is_connected(self) -> bool:  # pragma: no cover - must not be called
+                raise AssertionError("is_connected() pings the server")
+
+        class PureConn:
+            def __init__(self, socket: object) -> None:
+                self._socket = socket
+
+            def is_connected(self) -> bool:  # pragma: no cover - must not be called
+                raise AssertionError("is_connected() pings the server")
+
+        adapter = MysqlSyncAdapter()
+        assert adapter.is_connection_alive(CextConn(False))
+        assert not adapter.is_connection_alive(CextConn(True))
+        assert adapter.is_connection_alive(PureConn(object()))
+        assert not adapter.is_connection_alive(PureConn(None))

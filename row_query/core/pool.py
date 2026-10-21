@@ -87,19 +87,15 @@ class SyncPool(Generic[C]):
     def acquire(self) -> C:
         s = self._state
         deadline = time.monotonic() + s.timeout
-        stale: list[C] = []
-        try:
+        while True:
+            idle_conn: C | None = None
             with self._cond:
                 while True:
                     if s.closed:
                         raise PoolError("Connection pool is closed")
                     if s.idle:
-                        conn = s.idle.pop()
-                        if s.expired(conn) or not self._is_alive(conn):
-                            s.forget(conn)
-                            stale.append(conn)
-                            continue
-                        return conn
+                        idle_conn = s.idle.pop()
+                        break
                     if s.opened < s.size:
                         s.opened += 1
                         break
@@ -107,9 +103,15 @@ class SyncPool(Generic[C]):
                     if remaining <= 0:
                         raise PoolTimeoutError(s.size, s.timeout)
                     self._cond.wait(remaining)
-        finally:
-            for conn in stale:
-                self._safe_close(conn)
+            if idle_conn is None:
+                break  # a slot was reserved: open a new connection below
+            # Health checks run outside the lock so other threads are not blocked.
+            if not s.expired(idle_conn) and self._is_alive(idle_conn):
+                return idle_conn
+            with self._cond:
+                s.forget(idle_conn)
+                self._cond.notify()
+            self._safe_close(idle_conn)
 
         try:
             conn = self._connect()

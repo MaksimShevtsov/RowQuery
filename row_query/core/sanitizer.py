@@ -37,6 +37,7 @@ def _tokenize(sql: str) -> list[Token]:
       PostgreSQL; in MySQL ``$tag$`` is an identifier and the body is code.
     * ``#`` outside literals — a line comment in MySQL, an operator elsewhere.
     * ``--`` not followed by whitespace — not a comment in MySQL.
+    * ``/*`` inside a block comment — PostgreSQL nests block comments.
 
     Pass such values as bound parameters instead.
 
@@ -61,6 +62,11 @@ def _tokenize(sql: str) -> list[Token]:
         if kind == "code" and "#" in text:
             raise SQLSanitizationError(
                 "'#' outside string literals is ambiguous across databases (a comment in MySQL)"
+            )
+        if kind == "comment" and text.startswith("/*") and "/*" in text[2:]:
+            raise SQLSanitizationError(
+                "Nested block comments are ambiguous across databases "
+                "(PostgreSQL nests them, MySQL does not)"
             )
         if kind == "comment" and text.startswith("--"):
             if text[2:3] not in ("", " ", "\t", "\r"):

@@ -1,9 +1,13 @@
-"""Integration tests against real PostgreSQL / MySQL servers.
+"""Integration tests against real PostgreSQL / MySQL / Oracle servers.
 
 Enabled by environment variables (skipped otherwise):
 
     ROWQUERY_TEST_POSTGRESQL=postgresql://user:password@host:port/dbname
     ROWQUERY_TEST_MYSQL=mysql://user:password@host:port/dbname
+    ROWQUERY_TEST_ORACLE=oracle://user:password@host:port/service_name
+
+The Oracle tests target Oracle Database 23ai (``SELECT`` without ``FROM``,
+multi-row ``VALUES``).
 """
 
 from __future__ import annotations
@@ -26,7 +30,12 @@ from row_query.core.registry import SQLRegistry
 
 pytestmark = pytest.mark.integration
 
-_BACKENDS = {"postgresql": "ROWQUERY_TEST_POSTGRESQL", "mysql": "ROWQUERY_TEST_MYSQL"}
+_BACKENDS = {
+    "postgresql": "ROWQUERY_TEST_POSTGRESQL",
+    "mysql": "ROWQUERY_TEST_MYSQL",
+    "oracle": "ROWQUERY_TEST_ORACLE",
+}
+_DRIVER_MODULES = {"postgresql": "psycopg", "mysql": "mysql.connector", "oracle": "oracledb"}
 
 
 @pytest.fixture(scope="session")
@@ -41,7 +50,7 @@ def _config(driver: str, **overrides: object) -> ConnectionConfig:
     url = os.environ.get(_BACKENDS[driver])
     if not url:
         pytest.skip(f"{_BACKENDS[driver]} not set")
-    pytest.importorskip("psycopg" if driver == "postgresql" else "mysql.connector")
+    pytest.importorskip(_DRIVER_MODULES[driver])
     parsed = urlparse(url)
     return ConnectionConfig(
         driver=driver,
@@ -87,6 +96,31 @@ class TestSyncEngine:
     def test_portable_qmark_placeholders(self, engine: Engine, table: str) -> None:
         rows = engine.fetch_all(f"SELECT id FROM {table} WHERE id IN (?, ?) ORDER BY id", [1, 2])
         assert [r["id"] for r in rows] == [1, 2]
+
+    def test_native_pyformat_placeholders(self, engine: Engine, driver: str, table: str) -> None:
+        if driver == "oracle":
+            pytest.skip("pyformat is not Oracle's native style")
+        rows = engine.fetch_all(f"SELECT name FROM {table} WHERE id = %(id)s", {"id": 2})
+        assert rows == [{"name": "Bob"}]
+        assert engine.fetch_scalar(f"SELECT name FROM {table} WHERE id = %s", 1) == "Alice"
+
+    def test_backslash_literal_follows_backend_rules(
+        self, engine: Engine, driver: str, table: str
+    ) -> None:
+        # PostgreSQL/Oracle: 'C:\' is a complete literal; MySQL: \\ is an escaped backslash.
+        literal = r"'C:\\'" if driver == "mysql" else r"'C:\'"
+        value = engine.fetch_scalar(
+            f"SELECT {literal} AS p FROM {table} WHERE id = :id", {"id": 1}
+        )
+        assert value == "C:\\"
+
+    def test_jsonb_question_mark_operator(self, engine: Engine, driver: str) -> None:
+        if driver != "postgresql":
+            pytest.skip("JSONB is PostgreSQL-specific")
+        sql = "SELECT CAST('{\"k\": 1}' AS jsonb) ?? 'k' AND 1 = ?"
+        assert engine.fetch_scalar(sql, 1) is True
+        native = "SELECT CAST('{\"k\": 1}' AS jsonb) ? 'k' AND 1 = %s"
+        assert engine.fetch_scalar(native, 1) is True
 
     def test_reads_see_other_sessions_commits(
         self, engine: Engine, driver: str, table: str, tmp_path: Path

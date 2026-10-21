@@ -93,6 +93,7 @@ class _QueryPreparer:
             coerce_params(params),
             self._adapter.paramstyle,
             self._adapter.positional_paramstyle,
+            self._adapter.backslash_escapes,
         )
         return PreparedQuery(sql, bound, label)
 

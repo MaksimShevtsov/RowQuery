@@ -69,7 +69,13 @@ class TransactionManager(SyncExecutor):
     def __enter__(self) -> TransactionManager:
         if self._state != _TxState.IDLE:
             raise TransactionStateError(self._state.value, "begin")
-        self._conn = self._connection_manager.acquire()
+        conn = self._connection_manager.acquire()
+        try:
+            self._adapter.begin(conn)
+        except Exception as e:
+            self._connection_manager.release(conn)
+            raise translate_error(_TX_LABEL, e) from e
+        self._conn = conn
         self._state = _TxState.ACTIVE
         return self
 
@@ -135,7 +141,13 @@ class AsyncTransactionManager(AsyncExecutor):
     async def __aenter__(self) -> AsyncTransactionManager:
         if self._state != _TxState.IDLE:
             raise TransactionStateError(self._state.value, "begin")
-        self._conn = await self._connection_manager.acquire()
+        conn = await self._connection_manager.acquire()
+        try:
+            await self._adapter.begin_async(conn)
+        except Exception as e:
+            await self._connection_manager.release(conn)
+            raise translate_error(_TX_LABEL, e) from e
+        self._conn = conn
         self._state = _TxState.ACTIVE
         return self
 

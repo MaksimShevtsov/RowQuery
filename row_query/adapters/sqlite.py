@@ -30,6 +30,15 @@ class SqliteSyncAdapter:
     def is_connection_alive(self, connection: sqlite3.Connection) -> bool:
         return True
 
+    def begin(self, connection: sqlite3.Connection) -> None:
+        """Issue an explicit BEGIN.
+
+        The sqlite3 module only opens transactions implicitly before DML, so
+        DDL (CREATE/ALTER/DROP) would otherwise run in autocommit mode.
+        """
+        if not connection.in_transaction:
+            connection.execute("BEGIN")
+
     def execute(
         self,
         connection: sqlite3.Connection,
@@ -60,6 +69,11 @@ class SqliteAsyncAdapter:
 
     def is_connection_alive(self, connection: Any) -> bool:
         return True
+
+    async def begin_async(self, connection: Any) -> None:
+        """Issue an explicit BEGIN so that DDL is transactional too."""
+        if not connection.in_transaction:
+            await connection.execute("BEGIN")
 
     async def execute_async(
         self,

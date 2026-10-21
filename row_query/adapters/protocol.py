@@ -47,6 +47,10 @@ class SyncAdapter(Protocol):
         """Cheap, local check that a connection has not been closed or broken."""
         ...
 
+    def begin(self, connection: Any) -> None:
+        """Start an explicit transaction that also covers DDL statements."""
+        ...
+
     def execute(
         self,
         connection: Any,
@@ -86,6 +90,10 @@ class AsyncAdapter(Protocol):
 
     def is_connection_alive(self, connection: Any) -> bool:
         """Cheap, local check that a connection has not been closed or broken."""
+        ...
+
+    async def begin_async(self, connection: Any) -> None:
+        """Start an explicit transaction that also covers DDL statements."""
         ...
 
     async def execute_async(

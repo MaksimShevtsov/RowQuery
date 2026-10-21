@@ -48,7 +48,7 @@ jobs:
           fail_ci_if_error: false
 
   integration-servers:
-    name: Integration (PostgreSQL + MySQL)
+    name: Integration (PostgreSQL + MySQL + Oracle)
     runs-on: ubuntu-latest
 
     services:
@@ -76,10 +76,24 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          ORACLE_PASSWORD: rowquery
+          APP_USER: rowquery
+          APP_USER_PASSWORD: rowquery
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
 
     env:
       ROWQUERY_TEST_POSTGRESQL: postgresql://postgres:rowquery@127.0.0.1:5432/rowquery
       ROWQUERY_TEST_MYSQL: mysql://root:rowquery@127.0.0.1:3306/rowquery
+      ROWQUERY_TEST_ORACLE: oracle://rowquery:rowquery@127.0.0.1:1521/FREEPDB1
 
     steps:
       - uses: actions/checkout@v6

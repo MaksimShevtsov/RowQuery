@@ -46,6 +46,9 @@ class PostgresqlSyncAdapter:
     def is_connection_alive(self, connection: Any) -> bool:
         return not connection.closed and not connection.broken
 
+    def begin(self, connection: Any) -> None:
+        """Transactions start implicitly with the first statement."""
+
     def execute(
         self,
         connection: Any,
@@ -75,6 +78,9 @@ class PostgresqlAsyncAdapter:
 
     def is_connection_alive(self, connection: Any) -> bool:
         return not connection.closed and not connection.broken
+
+    async def begin_async(self, connection: Any) -> None:
+        """Transactions start implicitly with the first statement."""
 
     async def execute_async(
         self,

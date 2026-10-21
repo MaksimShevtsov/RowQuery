@@ -8,6 +8,7 @@ ConnectionManager and AsyncConnectionManager own a bounded connection pool
 from __future__ import annotations
 
 import importlib
+import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
@@ -87,6 +88,9 @@ class ConnectionManager:
         self.config = config
         self._adapter = _load_adapter(config.driver, "sync")
         self._pool: SyncPool[Any] | None = None
+        self._pool_lock = threading.Lock()
+        # Pool each borrowed connection came from (survives close_pool()).
+        self._owners: dict[int, SyncPool[Any]] = {}
 
     @property
     def adapter(self) -> Any:
@@ -94,7 +98,9 @@ class ConnectionManager:
 
     def initialize_pool(self) -> SyncPool[Any]:
         """Create the connection pool (connections are opened lazily)."""
-        if self._pool is None:
+        with self._pool_lock:
+            if self._pool is not None:
+                return self._pool
             adapter, config = self._adapter, self.config
             self._pool = SyncPool(
                 connect=lambda: adapter.connect(config),
@@ -105,15 +111,22 @@ class ConnectionManager:
                 timeout=config.pool_timeout,
                 recycle=_recycle_seconds(config),
             )
-        return self._pool
+            return self._pool
 
     def acquire(self) -> Any:
         """Borrow a connection; it must be returned with :meth:`release`."""
-        return self.initialize_pool().acquire()
+        pool = self.initialize_pool()
+        connection = pool.acquire()
+        self._owners[id(connection)] = pool
+        return connection
 
     def release(self, connection: Any) -> None:
-        """Return a connection, rolling back any uncommitted work."""
-        self.initialize_pool().release(connection)
+        """Return a connection to its pool, rolling back any uncommitted work.
+
+        If that pool has been closed in the meantime, the connection is closed.
+        """
+        pool = self._owners.pop(id(connection), None) or self.initialize_pool()
+        pool.release(connection)
 
     @contextmanager
     def get_connection(self) -> Iterator[Any]:
@@ -128,10 +141,14 @@ class ConnectionManager:
             self.release(connection)
 
     def close_pool(self) -> None:
-        """Close the connection pool."""
-        if self._pool is not None:
-            self._pool.close()
-            self._pool = None
+        """Close the connection pool.
+
+        Idle connections are closed now; borrowed ones when they are released.
+        """
+        with self._pool_lock:
+            pool, self._pool = self._pool, None
+        if pool is not None:
+            pool.close()
 
 
 class AsyncConnectionManager:
@@ -141,6 +158,7 @@ class AsyncConnectionManager:
         self.config = config
         self._adapter = _load_adapter(config.driver, "async")
         self._pool: AsyncPool[Any] | None = None
+        self._owners: dict[int, AsyncPool[Any]] = {}
 
     @property
     def adapter(self) -> Any:
@@ -167,11 +185,18 @@ class AsyncConnectionManager:
 
     async def acquire(self) -> Any:
         """Borrow a connection; it must be returned with :meth:`release`."""
-        return await (await self.initialize_pool()).acquire()
+        pool = await self.initialize_pool()
+        connection = await pool.acquire()
+        self._owners[id(connection)] = pool
+        return connection
 
     async def release(self, connection: Any) -> None:
-        """Return a connection, rolling back any uncommitted work."""
-        await (await self.initialize_pool()).release(connection)
+        """Return a connection to its pool, rolling back any uncommitted work.
+
+        If that pool has been closed in the meantime, the connection is closed.
+        """
+        pool = self._owners.pop(id(connection), None) or await self.initialize_pool()
+        await pool.release(connection)
 
     @asynccontextmanager
     async def get_connection(self) -> AsyncIterator[Any]:
@@ -186,7 +211,10 @@ class AsyncConnectionManager:
             await self.release(connection)
 
     async def close_pool(self) -> None:
-        """Close the async connection pool."""
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
+        """Close the async connection pool.
+
+        Idle connections are closed now; borrowed ones when they are released.
+        """
+        pool, self._pool = self._pool, None
+        if pool is not None:
+            await pool.close()

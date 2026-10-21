@@ -28,7 +28,7 @@ _REGISTRY_KEY_PATTERN = re.compile(r"^[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)+$")
 Params = dict[str, Any] | tuple[Any, ...] | None
 
 
-def normalize_params(sql: str, paramstyle: str) -> str:
+def normalize_params(sql: str, paramstyle: str, backslash_escapes: bool = True) -> str:
     """Convert :name parameters to the target param style.
 
     For ``pyformat`` every literal ``%`` is doubled so that the driver does
@@ -39,18 +39,27 @@ def normalize_params(sql: str, paramstyle: str) -> str:
     Args:
         sql: SQL string with :name parameters.
         paramstyle: Target style - 'named' (no conversion) or 'pyformat' (%(name)s).
+        backslash_escapes: Whether ``\\`` escapes quotes inside string literals
+            (MySQL) or not (PostgreSQL standard strings).
 
     Returns:
         SQL with parameters converted to the target style.
     """
     if paramstyle == "named":
         return sql
-    return _convert_named_to_pyformat(sql)
+    return _convert_named_to_pyformat(sql, backslash_escapes)
 
 
-def _rewrite_code(sql: str, pattern: re.Pattern[str], repl: Any, escape_percent: bool) -> str:
+def _rewrite_code(
+    sql: str,
+    pattern: re.Pattern[str],
+    repl: Any,
+    *,
+    escape_percent: bool,
+    backslash_escapes: bool,
+) -> str:
     """Apply *pattern* → *repl* in code tokens only; returns sql unchanged if no match."""
-    tokens = tokenize(sql, backslash_escapes=True)
+    tokens = tokenize(sql, backslash_escapes=backslash_escapes)
     if not any(kind == "code" and pattern.search(text) for kind, text in tokens):
         return sql
     parts: list[str] = []
@@ -64,28 +73,55 @@ def _rewrite_code(sql: str, pattern: re.Pattern[str], repl: Any, escape_percent:
 
 
 @lru_cache(maxsize=256)
-def _convert_named_to_pyformat(sql: str) -> str:
+def _convert_named_to_pyformat(sql: str, backslash_escapes: bool) -> str:
     """Convert :name params to %(name)s, escaping literal % characters."""
-    return _rewrite_code(sql, _PARAM_PATTERN, r"%(\1)s", escape_percent=True)
+    return _rewrite_code(
+        sql,
+        _PARAM_PATTERN,
+        r"%(\1)s",
+        escape_percent=True,
+        backslash_escapes=backslash_escapes,
+    )
 
 
-_QMARK_PATTERN = re.compile(r"\?")
+# A lone ? is a placeholder; ?? is an escaped literal ? (e.g. the PostgreSQL
+# JSONB operator: "data ?? 'key' AND id = ?").
+_QMARK_PATTERN = re.compile(r"\?\??")
+
+# Native pyformat placeholders: %s or %(name)s (but not an escaped %%s).
+_NATIVE_FORMAT_PATTERN = re.compile(r"(?<!%)%(\([A-Za-z_]\w*\))?s")
 
 
 @lru_cache(maxsize=256)
-def _convert_qmark(sql: str, positional_style: str) -> str:
-    """Convert positional ``?`` placeholders to ``%s`` (format) or ``:1`` (numeric)."""
-    if positional_style == "format":
-        return _rewrite_code(sql, _QMARK_PATTERN, "%s", escape_percent=True)
+def _has_native_placeholders(sql: str, backslash_escapes: bool) -> bool:
+    """Return True if *sql* already uses the driver's ``%s`` / ``%(name)s`` syntax."""
+    return any(
+        kind == "code" and _NATIVE_FORMAT_PATTERN.search(text)
+        for kind, text in tokenize(sql, backslash_escapes=backslash_escapes)
+    )
 
+
+@lru_cache(maxsize=256)
+def _convert_qmark(sql: str, positional_style: str, backslash_escapes: bool) -> str:
+    """Convert positional ``?`` placeholders to ``%s`` (format) or ``:1`` (numeric)."""
     counter = 0
 
-    def numbered(_: re.Match[str]) -> str:
+    def replace(match: re.Match[str]) -> str:
         nonlocal counter
+        if match.group() == "??":
+            return "?"
+        if positional_style == "format":
+            return "%s"
         counter += 1
         return f":{counter}"
 
-    return _rewrite_code(sql, _QMARK_PATTERN, numbered, escape_percent=False)
+    return _rewrite_code(
+        sql,
+        _QMARK_PATTERN,
+        replace,
+        escape_percent=positional_style == "format",
+        backslash_escapes=backslash_escapes,
+    )
 
 
 def bind_params(
@@ -93,6 +129,7 @@ def bind_params(
     params: Params,
     paramstyle: str,
     positional_style: str = "qmark",
+    backslash_escapes: bool = True,
 ) -> tuple[str, Params]:
     """Return ``(sql, params)`` ready to hand to a driver.
 
@@ -102,23 +139,31 @@ def bind_params(
         paramstyle: Driver named style - ``"named"`` or ``"pyformat"``.
         positional_style: Driver positional style - ``"qmark"`` (``?``),
             ``"numeric"`` (``:1``) or ``"format"`` (``%s``).
+        backslash_escapes: Whether ``\\`` escapes quotes in string literals
+            for the target database (see ``adapter.backslash_escapes``).
 
     * ``dict``/``None`` params: ``:name`` placeholders are converted. For
       ``pyformat`` drivers, SQL without placeholders is passed through
       unchanged with ``None`` params so that literal ``%`` survives.
     * ``tuple`` params: ``?`` placeholders are converted to the positional
-      style. SQL already written in the native positional style contains no
-      ``?`` and is passed through unchanged.
+      style; ``??`` stands for a literal ``?`` (PostgreSQL JSONB operators).
+    * SQL already written in the driver's native ``%s`` / ``%(name)s`` style
+      is passed through unchanged together with its params.
     """
     if isinstance(params, tuple):
         if positional_style == "qmark":
             return sql, params
-        return _convert_qmark(sql, positional_style), params
+        if positional_style == "format" and _has_native_placeholders(sql, backslash_escapes):
+            return sql, params
+        return _convert_qmark(sql, positional_style, backslash_escapes), params
 
     if paramstyle == "named":
         return sql, params
 
-    converted = normalize_params(sql, paramstyle)
+    if params and _has_native_placeholders(sql, backslash_escapes):
+        return sql, params
+
+    converted = normalize_params(sql, paramstyle, backslash_escapes)
     if converted == sql:  # no placeholders: conversion always changes the text
         return sql, None
     return converted, params

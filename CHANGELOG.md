@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Real connection pooling.** The pool now waits for a free connection (up to `pool_timeout`) instead of raising `RuntimeError` when exhausted, opens connections lazily, honours `pool_recycle`, and discards connections that fail the reset or are reported broken. `Engine` can be used from several threads (SQLite connections are opened with `check_same_thread=False`), and `asyncio.gather` with more tasks than `pool_size` works.
 - **`%` in SQL for PostgreSQL/MySQL.** Literal `%` (e.g. `LIKE 'a%'`) is escaped when `:name` placeholders are converted to `%(name)s`.
 - **Migrations**: files may contain several statements; versions are ordered numerically (`9_x` before `10_y`); the tracking table and inserts work on PostgreSQL, MySQL and Oracle; duplicate version numbers are rejected.
-- **SQLSanitizer bypasses**: constructs whose extent differs between MySQL and PostgreSQL are rejected (backslashes inside any quoted literal or identifier, dollar-quoted strings, `#` outside literals, `--` not followed by whitespace, `` inside `--` comments); the `allowed_verbs` check skips leading comments and rejects SQL whose verb cannot be determined (fail-closed); MySQL `/*! ... */` executable comments are rejected when comments are not stripped; unterminated block comments are rejected.
+- **SQLSanitizer bypasses**: constructs whose extent differs between MySQL and PostgreSQL are rejected (backslashes inside any quoted literal or identifier, dollar-quoted strings, `#` outside literals, `--` not followed by whitespace, `
+` inside `--` comments); the `allowed_verbs` check skips leading comments and rejects SQL whose verb cannot be determined (fail-closed); MySQL `/*! ... */` executable comments are rejected when comments are not stripped; unterminated block comments are rejected.
 - `Engine.transaction()` acquires its connection on `__enter__` instead of at call time.
 - Transactions now have the same query API as engines: `fetch_one` raises `MultipleRowsError`, plus `mapper=` and `fetch_scalar`.
 - `fetch_one` reads at most two rows instead of the whole result.
@@ -20,18 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PostgreSQL connection strings are built with `psycopg.conninfo.make_conninfo` (passwords with spaces or quotes work); `ConnectionConfig.extra` is passed to every driver.
 - Oracle: DSN defaults to port 1521 when `port` is unset; only ALL-CAPS column names are lowercased, so quoted mixed-case aliases are preserved.
 - Single-word inline SQL (`VACUUM`, `COMMIT`) is no longer mistaken for a registry key.
+- SQLite transactions and migrations now cover DDL: an explicit `BEGIN` is issued, so a failing transaction or migration rolls back `CREATE`/`ALTER`/`DROP` too (the `sqlite3` module only opens transactions implicitly before DML).
+- A connection released after `close_pool()` is closed instead of being handed to the new pool; pool initialisation is thread-safe.
+- MySQL connection liveness is checked locally instead of pinging the server on every acquire; pool health checks run outside the pool lock.
+- Applied migrations are matched by version number, so renaming `9_x.sql` to `009_x.sql` does not re-apply it.
+- Parameter conversion honours the backend's string-literal rules (`'C:\'` is a complete literal on PostgreSQL).
 - Strict aggregate mapping also validates reference and value-object columns.
 - Project URLs in `pyproject.toml` point to the correct GitHub repository.
 
 ### Added
-- Portable positional placeholders: `?` is converted to `%s` (PostgreSQL, MySQL) or `:1, :2, ...` (Oracle).
+- Portable positional placeholders: `?` is converted to `%s` (PostgreSQL, MySQL) or `:1, :2, ...` (Oracle); `??` is a literal `?` (e.g. the PostgreSQL JSONB operator). SQL already using native `%s` / `%(name)s` placeholders is passed through unchanged.
 - `QueryExecutionError` (database rejected the query) and `IntegrityError` (constraint violation), both carrying the driver exception as `__cause__`; `PoolTimeoutError`.
 - `Engine.close()` / `AsyncEngine.close()`; `ConnectionManager.acquire()` / `release()`.
-- CI runs the integration suite against PostgreSQL and MySQL service containers.
+- CI runs the integration suite against PostgreSQL, MySQL and Oracle (23ai Free) service containers.
 
 ### Changed
 - **Breaking:** errors that are not binding problems now raise `QueryExecutionError` instead of `ParameterBindingError` (which is now a subclass of `QueryExecutionError`). Catch `ExecutionError` or `QueryExecutionError` to handle all database errors.
-- **Breaking (adapter protocol):** adapters now implement `connect`/`close_connection`/`is_connection_alive`/`execute` (async: `connect_async`/`close_connection_async`/`execute_async`) plus `positional_paramstyle` and `backslash_escapes`; pooling moved into `row_query.core.pool`. `TransactionManager`/`AsyncTransactionManager` take a connection manager instead of a raw connection.
+- **Breaking (adapter protocol):** adapters now implement `connect`/`close_connection`/`is_connection_alive`/`execute` (async: `connect_async`/`close_connection_async`/`execute_async`) plus `begin`/`begin_async`, `positional_paramstyle` and `backslash_escapes`; pooling moved into `row_query.core.pool`. `TransactionManager`/`AsyncTransactionManager` take a connection manager instead of a raw connection.
 - `ConnectionConfig.pool_timeout` and `pool_recycle` are floats and are now enforced.
 
 ## [0.1.2] - 2026-02-22

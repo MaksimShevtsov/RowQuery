@@ -31,7 +31,16 @@ class MysqlSyncAdapter:
         connection.close()
 
     def is_connection_alive(self, connection: Any) -> bool:
-        return bool(connection.is_connected())
+        # Local check only: is_connected() pings the server on every call.
+        # A connection broken server-side fails its first query and is then
+        # discarded when the pool's rollback-on-release fails.
+        is_closed = getattr(connection, "is_closed", None)  # C extension
+        if is_closed is not None:
+            return not is_closed()
+        return getattr(connection, "_socket", None) is not None
+
+    def begin(self, connection: Any) -> None:
+        """Transactions start implicitly with the first statement."""
 
     def execute(
         self,
@@ -78,6 +87,9 @@ class MysqlAsyncAdapter:
 
     def is_connection_alive(self, connection: Any) -> bool:
         return not connection.closed
+
+    async def begin_async(self, connection: Any) -> None:
+        """Transactions start implicitly with the first statement."""
 
     async def execute_async(
         self,

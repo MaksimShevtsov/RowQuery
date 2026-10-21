@@ -76,7 +76,11 @@ class MigrationManager:
     def _run(self, conn: Any, sql: str, params: Any = None, label: str = "<migration>") -> Any:
         if params is not None:
             sql, params = bind_params(
-                sql, params, self._adapter.paramstyle, self._adapter.positional_paramstyle
+                sql,
+                params,
+                self._adapter.paramstyle,
+                self._adapter.positional_paramstyle,
+                self._adapter.backslash_escapes,
             )
         query = PreparedQuery(sql, params, label)
         with sync_cursor(self._adapter, conn, query) as cursor:
@@ -102,7 +106,8 @@ class MigrationManager:
 
     def discover(self) -> list[MigrationInfo]:
         """Discover all migration files and their applied status."""
-        applied_versions = self._get_applied_versions()
+        # Compare numerically so renaming 9_x.sql to 009_x.sql does not re-apply it.
+        applied_numbers = {int(v) for v in self._get_applied_versions()}
         migrations: list[MigrationInfo] = []
         seen: dict[int, str] = {}
 
@@ -128,7 +133,7 @@ class MigrationManager:
                     version=version,
                     description=match.group(2),
                     file_path=file_path,
-                    applied=version in applied_versions,
+                    applied=number in applied_numbers,
                 )
             )
 
@@ -156,6 +161,7 @@ class MigrationManager:
 
             with self._connection_manager.get_connection() as conn:
                 try:
+                    self._adapter.begin(conn)
                     for statement in self._statements(sql):
                         self._run(conn, statement, label=label)
                     self._run(

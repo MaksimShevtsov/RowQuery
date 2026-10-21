@@ -204,7 +204,7 @@ AsyncEngine has identical methods, all `async`.
 - Scalar value — Wrapped as `(value,)` automatically
 - `None` — No parameters (default)
 
-Both placeholder styles are portable: RowQuery converts `:name` to `%(name)s` and `?` to `%s` for PostgreSQL and MySQL, and `?` to `:1, :2, ...` for Oracle. Literal `%` characters (e.g. `LIKE 'a%'`) are escaped automatically. SQL already written in a driver's native positional style (`%s`) is passed through unchanged.
+Both placeholder styles are portable: RowQuery converts `:name` to `%(name)s` and `?` to `%s` for PostgreSQL and MySQL, and `?` to `:1, :2, ...` for Oracle. Literal `%` characters (e.g. `LIKE 'a%'`) are escaped automatically. Write `??` for a literal `?` (e.g. the PostgreSQL JSONB `?` operator) when using positional parameters. SQL already written in a driver's native style (`%s` / `%(name)s`) is passed through unchanged.
 
 **Connections and transaction state:** each engine call borrows a pooled connection. `execute()` commits immediately; any other open transaction state (read snapshots, locks, a failed statement) is rolled back when the connection returns to the pool. `Engine` can be shared between threads.
 
@@ -630,7 +630,7 @@ with engine.transaction() as tx:
 
 **Available methods within a transaction:**
 
-Transactions have the same query API as the engine (including `mapper=`, `fetch_scalar` and `MultipleRowsError` from `fetch_one`); writes are committed only when the transaction commits. The connection is acquired when the `with` block is entered.
+Transactions have the same query API as the engine (including `mapper=`, `fetch_scalar` and `MultipleRowsError` from `fetch_one`); writes are committed only when the transaction commits. The connection is acquired when the `with` block is entered. On SQLite an explicit `BEGIN` is issued so DDL statements are part of the transaction.
 
 | Method | Signature | Returns |
 |--------|-----------|---------|

@@ -63,6 +63,9 @@ class OracleSyncAdapter:
     def is_connection_alive(self, connection: Any) -> bool:
         return bool(connection.is_healthy())
 
+    def begin(self, connection: Any) -> None:
+        """Transactions start implicitly with the first statement."""
+
     def execute(
         self,
         connection: Any,
@@ -98,6 +101,9 @@ class OracleAsyncAdapter:
 
     def is_connection_alive(self, connection: Any) -> bool:
         return bool(connection.is_healthy())
+
+    async def begin_async(self, connection: Any) -> None:
+        """Transactions start implicitly with the first statement."""
 
     async def execute_async(
         self,
