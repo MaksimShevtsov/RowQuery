@@ -62,7 +62,7 @@ def _tokenize(sql: str) -> list[Token]:
             raise SQLSanitizationError(
                 "'#' outside string literals is ambiguous across databases (a comment in MySQL)"
             )
-        if kind == "comment" and text.startswith("--") and text[2:3] not in ("", " ", "\t", "\r"):
+        if kind == "comment" and text.startswith("--") and text[2:3] not in ("", " ", "\t"):
             raise SQLSanitizationError(
                 "'--' comments must be followed by a space (otherwise not a comment in MySQL)"
             )

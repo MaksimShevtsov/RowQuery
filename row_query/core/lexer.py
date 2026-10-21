@@ -21,6 +21,7 @@ TokenKind = Literal["code", "string", "identifier", "comment"]
 Token = tuple[TokenKind, str]
 
 _DOLLAR_TAG = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
+_EOL = re.compile(r"[\r\n]")
 
 
 class UnterminatedTokenError(ValueError):
@@ -123,8 +124,10 @@ def tokenize(
             code_start = i
         elif sql.startswith("--", i):
             flush_code(i)
-            eol = sql.find("\n", i)
-            end = n if eol == -1 else eol
+            # PostgreSQL ends line comments at \r as well as \n; ending at the
+            # earliest of the two never hides code from the sanitizer.
+            m = _EOL.search(sql, i)
+            end = n if m is None else m.start()
             i = _append(tokens, "comment", sql, i, end)
             code_start = i
         elif sql.startswith("/*", i):

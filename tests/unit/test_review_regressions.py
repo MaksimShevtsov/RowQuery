@@ -81,6 +81,14 @@ class TestSanitizerBypasses:
             sanitizer.sanitize("SELECT 1 --x; DROP TABLE users")
         assert sanitizer.sanitize("SELECT 1 -- ok") == "SELECT 1 -- ok"
 
+    def test_line_comment_ends_at_carriage_return(self) -> None:
+        # PostgreSQL ends '--' comments at \r, so the DROP would be executed
+        sql = "SELECT 1 -- x\r; DROP TABLE users"
+        with pytest.raises(SQLSanitizationError, match="Multiple SQL statements"):
+            SQLSanitizer(strip_comments=False).sanitize(sql)
+        with pytest.raises(SQLSanitizationError, match="Multiple SQL statements"):
+            SQLSanitizer().sanitize(sql)
+
     @pytest.mark.parametrize(
         "sql",
         [
