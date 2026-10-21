@@ -8,56 +8,49 @@ from row_query.core.connection import ConnectionConfig
 
 
 def _build_conninfo(config: ConnectionConfig) -> str:
-    """Build a libpq connection string from config fields."""
-    parts: list[str] = []
-    if config.host is not None:
-        parts.append(f"host={config.host}")
-    if config.port is not None:
-        parts.append(f"port={config.port}")
-    if config.user is not None:
-        parts.append(f"user={config.user}")
-    if config.password is not None:
-        parts.append(f"password={config.password}")
-    parts.append(f"dbname={config.database}")
-    return " ".join(parts)
+    """Build a libpq connection string from config fields.
+
+    Values are quoted by psycopg, so passwords containing spaces or quotes
+    are safe. ``config.extra`` is passed through as additional libpq
+    parameters (e.g. ``sslmode``, ``application_name``).
+    """
+    from psycopg.conninfo import make_conninfo
+
+    kwargs: dict[str, Any] = {
+        "host": config.host,
+        "port": config.port,
+        "user": config.user,
+        "password": config.password,
+        "dbname": config.database,
+        **config.extra,
+    }
+    return str(make_conninfo("", **{k: v for k, v in kwargs.items() if v is not None}))
 
 
 class PostgresqlSyncAdapter:
     """Synchronous PostgreSQL adapter using psycopg (v3+)."""
 
-    @property
-    def paramstyle(self) -> str:
-        return "pyformat"
+    paramstyle = "pyformat"
+    positional_paramstyle = "format"
+    backslash_escapes = False
 
-    def create_pool(self, config: ConnectionConfig) -> list[Any]:
+    def connect(self, config: ConnectionConfig) -> Any:
         import psycopg
         import psycopg.rows
 
-        conninfo = _build_conninfo(config)
-        pool: list[Any] = []
-        for _ in range(config.pool_size):
-            conn = psycopg.connect(conninfo, row_factory=psycopg.rows.dict_row)
-            pool.append(conn)
-        return pool
+        return psycopg.connect(_build_conninfo(config), row_factory=psycopg.rows.dict_row)
 
-    def acquire_connection(self, pool: list[Any]) -> Any:
-        if not pool:
-            raise RuntimeError("No connections available in pool")
-        return pool.pop()
+    def close_connection(self, connection: Any) -> None:
+        connection.close()
 
-    def release_connection(self, connection: Any, pool: list[Any]) -> None:
-        pool.append(connection)
-
-    def close_pool(self, pool: list[Any]) -> None:
-        for conn in pool:
-            conn.close()
-        pool.clear()
+    def is_connection_alive(self, connection: Any) -> bool:
+        return not connection.closed and not connection.broken
 
     def execute(
         self,
         connection: Any,
         sql: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple[Any, ...] | None = None,
     ) -> Any:
         return connection.execute(sql, params)
 
@@ -65,40 +58,28 @@ class PostgresqlSyncAdapter:
 class PostgresqlAsyncAdapter:
     """Asynchronous PostgreSQL adapter using psycopg (v3+) async support."""
 
-    @property
-    def paramstyle(self) -> str:
-        return "pyformat"
+    paramstyle = "pyformat"
+    positional_paramstyle = "format"
+    backslash_escapes = False
 
-    async def create_pool_async(self, config: ConnectionConfig) -> list[Any]:
+    async def connect_async(self, config: ConnectionConfig) -> Any:
         import psycopg
         import psycopg.rows
 
-        conninfo = _build_conninfo(config)
-        pool: list[Any] = []
-        for _ in range(config.pool_size):
-            conn = await psycopg.AsyncConnection.connect(
-                conninfo, row_factory=psycopg.rows.dict_row
-            )
-            pool.append(conn)
-        return pool
+        return await psycopg.AsyncConnection.connect(
+            _build_conninfo(config), row_factory=psycopg.rows.dict_row
+        )
 
-    async def acquire_connection_async(self, pool: list[Any]) -> Any:
-        if not pool:
-            raise RuntimeError("No connections available in pool")
-        return pool.pop()
+    async def close_connection_async(self, connection: Any) -> None:
+        await connection.close()
 
-    async def release_connection_async(self, connection: Any, pool: list[Any]) -> None:
-        pool.append(connection)
-
-    async def close_pool_async(self, pool: list[Any]) -> None:
-        for conn in pool:
-            await conn.close()
-        pool.clear()
+    def is_connection_alive(self, connection: Any) -> bool:
+        return not connection.closed and not connection.broken
 
     async def execute_async(
         self,
         connection: Any,
         sql: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple[Any, ...] | None = None,
     ) -> Any:
         return await connection.execute(sql, params)

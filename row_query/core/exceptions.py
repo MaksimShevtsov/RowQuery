@@ -52,12 +52,30 @@ class MultipleRowsError(ExecutionError):
         )
 
 
-class ParameterBindingError(ExecutionError):
-    """Raised on parameter binding failures."""
+class QueryExecutionError(ExecutionError):
+    """Raised when the database rejects a query.
+
+    The original driver exception is available as ``__cause__``.
+    """
+
+    _label = "Query execution error"
 
     def __init__(self, query_name: str, detail: str) -> None:
         self.query_name = query_name
-        super().__init__(f"Parameter binding error for '{query_name}': {detail}")
+        self.detail = detail
+        super().__init__(f"{self._label} for '{query_name}': {detail}")
+
+
+class ParameterBindingError(QueryExecutionError):
+    """Raised on parameter binding failures (missing, extra or mistyped parameters)."""
+
+    _label = "Parameter binding error"
+
+
+class IntegrityError(QueryExecutionError):
+    """Raised on constraint violations (unique, foreign key, not null, check)."""
+
+    _label = "Integrity constraint violation"
 
 
 class SQLSanitizationError(ExecutionError):
@@ -143,3 +161,15 @@ class ConnectionError(AdapterError):  # noqa: A001
 
 class PoolError(AdapterError):
     """Raised on connection pool failures."""
+
+
+class PoolTimeoutError(PoolError):
+    """Raised when no pooled connection becomes available within ``pool_timeout``."""
+
+    def __init__(self, pool_size: int, timeout: float) -> None:
+        self.pool_size = pool_size
+        self.timeout = timeout
+        super().__init__(
+            f"Timed out after {timeout}s waiting for a connection "
+            f"(pool_size={pool_size}, all connections in use)"
+        )

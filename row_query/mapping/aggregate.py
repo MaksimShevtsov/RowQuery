@@ -156,6 +156,26 @@ class AggregateMapper(Generic[T]):
                         f"'{coll.attribute_name}' field '{attr_name}'"
                     )
 
+        # Check reference fields
+        for ref in plan.reference_plans:
+            for attr_name, col_name in ref.entity_plan.field_map.items():
+                full_col = ref.entity_plan.prefix + col_name
+                if full_col not in row_columns:
+                    raise StrictModeViolation(
+                        f"Missing mapped column '{full_col}' for reference "
+                        f"'{ref.attribute_name}' field '{attr_name}'"
+                    )
+
+        # Check value object fields
+        for vo in plan.value_object_plans:
+            for attr_name, col_name in vo.field_map.items():
+                full_col = vo.prefix + col_name
+                if full_col not in row_columns:
+                    raise StrictModeViolation(
+                        f"Missing mapped column '{full_col}' for value object "
+                        f"'{vo.attribute_name}' field '{attr_name}'"
+                    )
+
         # Check for unknown prefix groups
         known_prefixes = {plan.root_plan.prefix}
         for coll in plan.collection_plans:

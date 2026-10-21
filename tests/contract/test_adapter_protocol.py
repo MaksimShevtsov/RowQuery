@@ -25,21 +25,14 @@ class TestSqliteSyncAdapterProtocol:
 
     def test_lifecycle(self, sqlite_config: ConnectionConfig) -> None:
         adapter = SqliteSyncAdapter()
-        pool = adapter.create_pool(sqlite_config)
-        assert len(pool) == 1
-
-        conn = adapter.acquire_connection(pool)
-        assert conn is not None
+        conn = adapter.connect(sqlite_config)
+        assert adapter.is_connection_alive(conn)
 
         cursor = adapter.execute(conn, "SELECT 1 AS val")
         row = cursor.fetchone()
         assert row["val"] == 1
 
-        adapter.release_connection(conn, pool)
-        assert len(pool) == 1
-
-        adapter.close_pool(pool)
-        assert len(pool) == 0
+        adapter.close_connection(conn)
 
 
 class TestSqliteAsyncAdapterProtocol:
@@ -53,21 +46,14 @@ class TestSqliteAsyncAdapterProtocol:
 
     async def test_lifecycle(self, sqlite_config: ConnectionConfig) -> None:
         adapter = SqliteAsyncAdapter()
-        pool = await adapter.create_pool_async(sqlite_config)
-        assert len(pool) == 1
-
-        conn = await adapter.acquire_connection_async(pool)
-        assert conn is not None
+        conn = await adapter.connect_async(sqlite_config)
+        assert adapter.is_connection_alive(conn)
 
         cursor = await adapter.execute_async(conn, "SELECT 1 AS val")
         row = await cursor.fetchone()
         assert row["val"] == 1
 
-        await adapter.release_connection_async(conn, pool)
-        assert len(pool) == 1
-
-        await adapter.close_pool_async(pool)
-        assert len(pool) == 0
+        await adapter.close_connection_async(conn)
 
 
 # --- PostgreSQL protocol compliance ---

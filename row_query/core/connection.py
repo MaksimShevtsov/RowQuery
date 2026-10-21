@@ -1,23 +1,35 @@
 """Connection configuration and management.
 
 ConnectionConfig is a Pydantic model for type-safe connection config.
-ConnectionManager and AsyncConnectionManager use adapter protocols for
-pool-based connection lifecycle.
+ConnectionManager and AsyncConnectionManager own a bounded connection pool
+(see ``row_query.core.pool``) built on top of an adapter.
 """
 
 from __future__ import annotations
 
 import importlib
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
 from pydantic import BaseModel
 
 from row_query.core.exceptions import AdapterError
+from row_query.core.pool import AsyncPool, SyncPool
 
 
 class ConnectionConfig(BaseModel):
-    """Configuration for database connections."""
+    """Configuration for database connections.
+
+    Attributes:
+        pool_size: Maximum number of open connections. Connections are opened
+            lazily on demand.
+        pool_timeout: Seconds to wait for a free connection before raising
+            ``PoolTimeoutError``.
+        pool_recycle: Close and reopen connections older than this many
+            seconds (``0`` disables). Ignored for SQLite.
+        extra: Additional driver-specific connection arguments.
+    """
 
     driver: str
     host: str | None = None
@@ -26,8 +38,8 @@ class ConnectionConfig(BaseModel):
     password: str | None = None
     database: str
     pool_size: int = 5
-    pool_timeout: int = 30
-    pool_recycle: int = 1800
+    pool_timeout: float = 30
+    pool_recycle: float = 1800
     extra: dict[str, Any] = {}
 
 
@@ -60,73 +72,121 @@ def _load_adapter(driver: str, kind: str) -> Any:
         raise AdapterError(f"Failed to load {kind} adapter for '{driver}': {e}") from e
 
 
+def _recycle_seconds(config: ConnectionConfig) -> float | None:
+    # SQLite has no server-side idle timeouts, and recycling a ":memory:"
+    # connection would silently drop the database.
+    if config.driver.lower() == "sqlite" or config.pool_recycle <= 0:
+        return None
+    return config.pool_recycle
+
+
 class ConnectionManager:
-    """Synchronous connection manager using SyncAdapter protocol."""
+    """Synchronous connection manager backed by a thread-safe pool."""
 
     def __init__(self, config: ConnectionConfig) -> None:
         self.config = config
         self._adapter = _load_adapter(config.driver, "sync")
-        self._pool: Any = None
+        self._pool: SyncPool[Any] | None = None
 
     @property
     def adapter(self) -> Any:
         return self._adapter
 
-    def initialize_pool(self) -> Any:
-        """Initialize the connection pool."""
+    def initialize_pool(self) -> SyncPool[Any]:
+        """Create the connection pool (connections are opened lazily)."""
         if self._pool is None:
-            self._pool = self._adapter.create_pool(self.config)
+            adapter, config = self._adapter, self.config
+            self._pool = SyncPool(
+                connect=lambda: adapter.connect(config),
+                close=adapter.close_connection,
+                reset=lambda conn: conn.rollback(),
+                is_alive=adapter.is_connection_alive,
+                size=config.pool_size,
+                timeout=config.pool_timeout,
+                recycle=_recycle_seconds(config),
+            )
         return self._pool
 
+    def acquire(self) -> Any:
+        """Borrow a connection; it must be returned with :meth:`release`."""
+        return self.initialize_pool().acquire()
+
+    def release(self, connection: Any) -> None:
+        """Return a connection, rolling back any uncommitted work."""
+        self.initialize_pool().release(connection)
+
     @contextmanager
-    def get_connection(self):  # type: ignore[no-untyped-def]
-        """Get a connection from the pool as a context manager."""
-        if self._pool is None:
-            self.initialize_pool()
-        connection = self._adapter.acquire_connection(self._pool)
+    def get_connection(self) -> Iterator[Any]:
+        """Borrow a connection for the duration of the ``with`` block.
+
+        Uncommitted work is rolled back when the block exits.
+        """
+        connection = self.acquire()
         try:
             yield connection
         finally:
-            self._adapter.release_connection(connection, self._pool)
+            self.release(connection)
 
     def close_pool(self) -> None:
         """Close the connection pool."""
         if self._pool is not None:
-            self._adapter.close_pool(self._pool)
+            self._pool.close()
             self._pool = None
 
 
 class AsyncConnectionManager:
-    """Asynchronous connection manager using AsyncAdapter protocol."""
+    """Asynchronous connection manager backed by an asyncio pool."""
 
     def __init__(self, config: ConnectionConfig) -> None:
         self.config = config
         self._adapter = _load_adapter(config.driver, "async")
-        self._pool: Any = None
+        self._pool: AsyncPool[Any] | None = None
 
     @property
     def adapter(self) -> Any:
         return self._adapter
 
-    async def initialize_pool(self) -> Any:
-        """Initialize the async connection pool."""
+    async def initialize_pool(self) -> AsyncPool[Any]:
+        """Create the async connection pool (connections are opened lazily)."""
         if self._pool is None:
-            self._pool = await self._adapter.create_pool_async(self.config)
+            adapter, config = self._adapter, self.config
+
+            async def reset(conn: Any) -> None:
+                await conn.rollback()
+
+            self._pool = AsyncPool(
+                connect=lambda: adapter.connect_async(config),
+                close=adapter.close_connection_async,
+                reset=reset,
+                is_alive=adapter.is_connection_alive,
+                size=config.pool_size,
+                timeout=config.pool_timeout,
+                recycle=_recycle_seconds(config),
+            )
         return self._pool
 
+    async def acquire(self) -> Any:
+        """Borrow a connection; it must be returned with :meth:`release`."""
+        return await (await self.initialize_pool()).acquire()
+
+    async def release(self, connection: Any) -> None:
+        """Return a connection, rolling back any uncommitted work."""
+        await (await self.initialize_pool()).release(connection)
+
     @asynccontextmanager
-    async def get_connection(self):  # type: ignore[no-untyped-def]
-        """Get an async connection from the pool as an async context manager."""
-        if self._pool is None:
-            await self.initialize_pool()
-        connection = await self._adapter.acquire_connection_async(self._pool)
+    async def get_connection(self) -> AsyncIterator[Any]:
+        """Borrow a connection for the duration of the ``async with`` block.
+
+        Uncommitted work is rolled back when the block exits.
+        """
+        connection = await self.acquire()
         try:
             yield connection
         finally:
-            await self._adapter.release_connection_async(connection, self._pool)
+            await self.release(connection)
 
     async def close_pool(self) -> None:
         """Close the async connection pool."""
         if self._pool is not None:
-            await self._adapter.close_pool_async(self._pool)
+            await self._pool.close()
             self._pool = None

@@ -2,6 +2,11 @@
 
 Every adapter module MUST implement these protocols. Constitution Principle III
 requires identical public interfaces across all adapters.
+
+Adapters deal with single connections only; pooling, transaction reset and
+error translation live in ``row_query.core``. Connections returned by
+``connect`` must expose DB-API ``commit()`` and ``rollback()`` methods
+(coroutines for async adapters).
 """
 
 from __future__ import annotations
@@ -17,32 +22,38 @@ class SyncAdapter(Protocol):
 
     @property
     def paramstyle(self) -> str:
-        """Parameter binding style: 'named' (:name) or 'pyformat' (%(name)s)."""
+        """Named parameter style: 'named' (:name) or 'pyformat' (%(name)s)."""
         ...
 
-    def create_pool(self, config: ConnectionConfig) -> Any:
-        """Create a connection pool."""
+    @property
+    def positional_paramstyle(self) -> str:
+        """Positional parameter style: 'qmark' (?), 'numeric' (:1) or 'format' (%s)."""
         ...
 
-    def acquire_connection(self, pool: Any) -> Any:
-        """Acquire a connection from the pool."""
+    @property
+    def backslash_escapes(self) -> bool:
+        """Whether ``\\`` escapes quotes inside plain string literals (MySQL)."""
         ...
 
-    def release_connection(self, connection: Any, pool: Any) -> None:
-        """Release a connection back to the pool."""
+    def connect(self, config: ConnectionConfig) -> Any:
+        """Open a new connection."""
         ...
 
-    def close_pool(self, pool: Any) -> None:
-        """Close the pool and release all connections."""
+    def close_connection(self, connection: Any) -> None:
+        """Close a connection."""
+        ...
+
+    def is_connection_alive(self, connection: Any) -> bool:
+        """Cheap, local check that a connection has not been closed or broken."""
         ...
 
     def execute(
         self,
         connection: Any,
         sql: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple[Any, ...] | None = None,
     ) -> Any:
-        """Execute SQL and return a cursor-like object."""
+        """Execute SQL and return a DB-API cursor-like object."""
         ...
 
 
@@ -52,30 +63,36 @@ class AsyncAdapter(Protocol):
 
     @property
     def paramstyle(self) -> str:
-        """Parameter binding style: 'named' (:name) or 'pyformat' (%(name)s)."""
+        """Named parameter style: 'named' (:name) or 'pyformat' (%(name)s)."""
         ...
 
-    async def create_pool_async(self, config: ConnectionConfig) -> Any:
-        """Create an async connection pool."""
+    @property
+    def positional_paramstyle(self) -> str:
+        """Positional parameter style: 'qmark' (?), 'numeric' (:1) or 'format' (%s)."""
         ...
 
-    async def acquire_connection_async(self, pool: Any) -> Any:
-        """Acquire a connection from the async pool."""
+    @property
+    def backslash_escapes(self) -> bool:
+        """Whether ``\\`` escapes quotes inside plain string literals (MySQL)."""
         ...
 
-    async def release_connection_async(self, connection: Any, pool: Any) -> None:
-        """Release a connection back to the async pool."""
+    async def connect_async(self, config: ConnectionConfig) -> Any:
+        """Open a new connection."""
         ...
 
-    async def close_pool_async(self, pool: Any) -> None:
-        """Close the async pool."""
+    async def close_connection_async(self, connection: Any) -> None:
+        """Close a connection."""
+        ...
+
+    def is_connection_alive(self, connection: Any) -> bool:
+        """Cheap, local check that a connection has not been closed or broken."""
         ...
 
     async def execute_async(
         self,
         connection: Any,
         sql: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple[Any, ...] | None = None,
     ) -> Any:
         """Execute SQL asynchronously and return a cursor-like object."""
         ...

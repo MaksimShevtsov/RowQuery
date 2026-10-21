@@ -70,6 +70,10 @@ count = engine.fetch_scalar("SELECT COUNT(*) FROM users")
 rows = engine.fetch_all("SELECT * FROM users WHERE id IN (?, ?)", [1, 2])
 ```
 
+Placeholders are portable: use `:name` with a dict or `?` with positional values on any
+backend. RowQuery converts them to the driver's native style (`%(name)s` / `%s` for
+PostgreSQL and MySQL, `:1` for Oracle) and escapes literal `%` such as `LIKE 'a%'`.
+
 ### 3. Map to Models
 ```python
 from dataclasses import dataclass

@@ -13,7 +13,7 @@ Thank you for your interest in contributing! This document provides guidelines f
 
 ```bash
 # Clone repository
-git clone https://github.com/maksim-shevtsov/RowQuery.git
+git clone https://github.com/MaksimShevtsov/RowQuery.git
 cd RowQuery
 
 # Install all dependencies (including all database drivers)

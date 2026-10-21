@@ -129,11 +129,9 @@ class TestStripComments:
         sql = "SELECT 'it''s fine -- not a comment' FROM t"
         assert _strip_comments(sql) == sql
 
-    def test_unclosed_block_comment_strips_remainder(self) -> None:
-        sql = "SELECT 1 /* unclosed"
-        result = _strip_comments(sql)
-        assert "/*" not in result
-        assert result.startswith("SELECT 1 ")
+    def test_unclosed_block_comment_is_rejected(self) -> None:
+        with pytest.raises(SQLSanitizationError, match="Unterminated block comment"):
+            _strip_comments("SELECT 1 /* unclosed")
 
     def test_line_comment_without_trailing_newline_strips_to_end(self) -> None:
         sql = "SELECT 1 -- trailing only"

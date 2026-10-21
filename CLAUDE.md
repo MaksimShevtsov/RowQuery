@@ -19,7 +19,9 @@ uv sync --extra all        # Install all database drivers
 ## Commands
 
 ```bash
-uv run pytest              # Run all tests (125 tests)
+uv run pytest              # Run all tests
+# Server integration tests run when ROWQUERY_TEST_POSTGRESQL / ROWQUERY_TEST_MYSQL
+# are set to postgresql://user:pw@host:port/db and mysql://user:pw@host:port/db URLs
 uv run pytest tests/unit/  # Unit tests only
 uv run pytest tests/contract/  # Protocol contract tests
 uv run pytest tests/integration/  # SQLite integration tests
@@ -32,13 +34,17 @@ uv run mypy row_query/     # Type check (strict mode)
 
 - **`row_query/core/`** — Core engine
   - `connection.py` — `ConnectionConfig` (Pydantic), `ConnectionManager`, `AsyncConnectionManager`
+  - `pool.py` — `SyncPool`/`AsyncPool`: bounded, lazy, timeout + recycle, rollback on release
+  - `execution.py` — `SyncExecutor`/`AsyncExecutor` (query API shared by engines and transactions), driver error translation
   - `engine.py` — `Engine` and `AsyncEngine` (fetch_one, fetch_all, fetch_scalar, execute, transaction)
   - `registry.py` — `SQLRegistry` (loads .sql files into dot-separated namespaces)
   - `transaction.py` — `TransactionManager`, `AsyncTransactionManager`
   - `migration.py` — `MigrationManager`, `MigrationInfo`
-  - `params.py` — `:name` → `%(name)s` parameter normalizer with cache
+  - `params.py` — `:name`/`?` → driver placeholder conversion (escapes `%` for pyformat)
+  - `lexer.py` — SQL tokenizer (strings, `$$`, `E''`, identifiers, comments) and statement splitter
+  - `sanitizer.py` — fail-closed `SQLSanitizer` for inline SQL
   - `enums.py` — `DatabaseBackend` enum
-  - `exceptions.py` — Full exception hierarchy (18 classes)
+  - `exceptions.py` — Full exception hierarchy
 
 - **`row_query/adapters/`** — Database drivers
   - `protocol.py` — `SyncAdapter`, `AsyncAdapter` runtime-checkable protocols
