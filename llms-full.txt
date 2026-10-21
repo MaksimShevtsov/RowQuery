@@ -548,11 +548,54 @@ plan = (
 | `.key(field_name)` | **Required.** Sets the identity key field for the root entity. |
 | `.auto_fields()` | Auto-maps all fields of the root class (excluding collections, references, value objects). |
 | `.field(attr_name, column_name=None)` | Explicitly map a single field. `column_name` defaults to `attr_name`. |
-| `.collection(name, entity_class, prefix, key)` | Define a child collection (one-to-many). |
+| `.collection(name, entity_class, prefix, key)` | Define a child collection (one-to-many). A dotted `name` such as `"lines.discounts"` nests the collection inside a previously declared collection (any depth). |
 | `.reference(name, entity_class, prefix, key=None)` | Define a reference (many-to-one). `key` defaults to `"id"`. |
 | `.value_object(name, vo_class, prefix)` | Define an embedded value object. |
 | `.strict(enabled=True)` | Enable strict mode: validates all mapped columns exist in result set. |
 | `.build()` | Compile and return an `AggregatePlan`. Raises `PlanCompilationError` if `.key()` was not called or prefixes collide. |
+
+**Nested collections:** declare the parent collection first, then the child with a dotted path. The nested attribute (`discounts` below) is excluded from the parent entity's column mapping and initialised to an empty list.
+
+```python
+@dataclass
+class Discount:
+    id: int
+    percent: int
+
+@dataclass
+class Line:
+    id: int
+    sku: str
+    discounts: list[Discount] = field(default_factory=list)
+
+@dataclass
+class Invoice:
+    id: int
+    lines: list[Line] = field(default_factory=list)
+
+plan = (
+    aggregate(Invoice, prefix="invoice__")
+    .key("id")
+    .auto_fields()
+    .collection("lines", Line, prefix="line__", key="id")
+    .collection("lines.discounts", Discount, prefix="disc__", key="id")
+    .build()
+)
+
+invoices = engine.fetch_all(
+    """
+    SELECT i.id AS invoice__id,
+           l.id AS line__id, l.sku AS line__sku,
+           d.id AS disc__id, d.percent AS disc__percent
+    FROM invoices i
+    LEFT JOIN lines l ON l.invoice_id = i.id
+    LEFT JOIN discounts d ON d.line_id = l.id
+    """,
+    mapper=AggregateMapper(plan),
+)
+```
+
+Nested collections currently support collection members only; references and value objects are declared on the aggregate root.
 
 #### AggregateMapper
 
@@ -588,7 +631,8 @@ orders = engine.fetch_all(
 
 **Behavior:**
 - Deduplicates root entities by key field (e.g., one Order per unique `order__id`).
-- Deduplicates collection children by their key field.
+- Deduplicates collection children by their key field, per parent instance (the same child key under two different parents yields two children).
+- Nested collections are filled recursively in the same single pass; a NULL child key skips that child and everything nested below it.
 - References and value objects are set once per root (first non-NULL occurrence).
 - Rows with NULL root key are silently skipped.
 - `map_one()` raises `NotImplementedError` — use `map_many()` only.

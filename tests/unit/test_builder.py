@@ -157,18 +157,3 @@ class TestAggregateMappingBuilder:
     def test_default_prefix(self) -> None:
         plan = aggregate(User).key("id").auto_fields().build()
         assert plan.root_plan.prefix == "user__"
-
-    def test_nesting_depth_limit(self) -> None:
-        # Collections within collections within collections should fail at depth > 2
-        # This is validated at build time
-        # We can only test single-level nesting via the API since the DSL
-        # doesn't currently support nested collection chaining.
-        # The validation still happens in build().
-        plan = (
-            aggregate(User, prefix="user__")
-            .key("id")
-            .auto_fields()
-            .collection("orders", Order, prefix="orders__", key="id")
-            .build()
-        )
-        assert len(plan.collection_plans) == 1

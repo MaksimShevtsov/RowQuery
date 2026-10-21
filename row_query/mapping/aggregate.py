@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Generic, TypeVar
 
 from row_query.core.exceptions import StrictModeViolation
-from row_query.mapping.plan import AggregatePlan
+from row_query.mapping.plan import AggregatePlan, CollectionPlan
 
 T = TypeVar("T")
 
@@ -20,6 +20,48 @@ def _extract_fields(row: dict[str, Any], prefix: str, field_map: dict[str, str])
         full_col = prefix + col_name
         result[attr_name] = row.get(full_col)
     return result
+
+
+def _walk_collections(plans: list[CollectionPlan]) -> list[CollectionPlan]:
+    """Return *plans* and all their nested children, depth-first."""
+    result: list[CollectionPlan] = []
+    for plan in plans:
+        result.append(plan)
+        result.extend(_walk_collections(plan.children))
+    return result
+
+
+def _map_collections(
+    row: dict[str, Any],
+    parent: Any,
+    plans: list[CollectionPlan],
+    index: dict[tuple[int, str], dict[Any, Any]],
+) -> None:
+    """Attach the children found in *row* to *parent*, recursing into nested collections.
+
+    *index* maps ``(id(parent), attribute)`` to the children already attached,
+    keyed by child identity, so a child is deduplicated per parent instance.
+    """
+    for coll in plans:
+        entity = coll.entity_plan
+        child_key = row.get(entity.prefix + entity.key_field)
+
+        # Skip NULL child key (and therefore its nested collections)
+        if child_key is None:
+            continue
+
+        seen = index.setdefault((id(parent), coll.attribute_name), {})
+        child = seen.get(child_key)
+        if child is None:
+            child_fields = _extract_fields(row, entity.prefix, entity.field_map)
+            for nested in coll.children:
+                child_fields[nested.attribute_name] = []
+            child = entity.target_class(**child_fields)
+            getattr(parent, coll.attribute_name).append(child)
+            seen[child_key] = child
+
+        if coll.children:
+            _map_collections(row, child, coll.children, index)
 
 
 class AggregateMapper(Generic[T]):
@@ -57,9 +99,8 @@ class AggregateMapper(Generic[T]):
         root_identity: dict[Any, Any] = {}
         root_order: list[Any] = []  # Preserve insertion order
 
-        # Per-root collection identity maps
-        # root_key -> collection_name -> set of child keys
-        collection_ids: dict[Any, dict[str, set[Any]]] = {}
+        # Collection identity maps: (id(parent), collection_name) -> child_key -> child
+        collection_index: dict[tuple[int, str], dict[Any, Any]] = {}
 
         for row in rows:
             # Extract root key
@@ -85,29 +126,11 @@ class AggregateMapper(Generic[T]):
                 root_instance = plan.root_plan.target_class(**root_fields)
                 root_identity[root_key] = root_instance
                 root_order.append(root_key)
-                collection_ids[root_key] = {
-                    coll.attribute_name: set() for coll in plan.collection_plans
-                }
 
             root_instance = root_identity[root_key]
 
-            # Process collections
-            for coll in plan.collection_plans:
-                child_key_col = coll.entity_plan.prefix + coll.entity_plan.key_field
-                child_key = row.get(child_key_col)
-
-                # Skip NULL child key
-                if child_key is None:
-                    continue
-
-                # Deduplicate by identity
-                if child_key not in collection_ids[root_key][coll.attribute_name]:
-                    child_fields = _extract_fields(
-                        row, coll.entity_plan.prefix, coll.entity_plan.field_map
-                    )
-                    child_instance = coll.entity_plan.target_class(**child_fields)
-                    getattr(root_instance, coll.attribute_name).append(child_instance)
-                    collection_ids[root_key][coll.attribute_name].add(child_key)
+            # Process collections (recursively, deduplicated per parent)
+            _map_collections(row, root_instance, plan.collection_plans, collection_index)
 
             # Process references (construct once per root)
             for ref in plan.reference_plans:
@@ -146,8 +169,8 @@ class AggregateMapper(Generic[T]):
                     f"field '{attr_name}' in {plan.root_plan.target_class.__name__}"
                 )
 
-        # Check collection fields
-        for coll in plan.collection_plans:
+        # Check collection fields (including nested collections)
+        for coll in _walk_collections(plan.collection_plans):
             for attr_name, col_name in coll.entity_plan.field_map.items():
                 full_col = coll.entity_plan.prefix + col_name
                 if full_col not in row_columns:
@@ -178,7 +201,7 @@ class AggregateMapper(Generic[T]):
 
         # Check for unknown prefix groups
         known_prefixes = {plan.root_plan.prefix}
-        for coll in plan.collection_plans:
+        for coll in _walk_collections(plan.collection_plans):
             known_prefixes.add(coll.entity_plan.prefix)
         for ref in plan.reference_plans:
             known_prefixes.add(ref.entity_plan.prefix)
