@@ -1,6 +1,6 @@
 # RowQuery
 
-[![PyPI version](https://badge.fury.io/py/rowquery.svg)](https://pypi.org/project/rowquery/)
+[![PyPI version](https://img.shields.io/pypi/v/rowquery.svg)](https://pypi.org/project/rowquery/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/rowquery.svg)](https://pypi.org/project/rowquery/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://github.com/MaksimShevtsov/RowQuery/actions/workflows/test.yml/badge.svg)](https://github.com/MaksimShevtsov/RowQuery/actions/workflows/test.yml)
