@@ -71,8 +71,23 @@ class TestSanitizerBypasses:
             SQLSanitizer().sanitize(sql)
 
     def test_dollar_quoted_body_is_a_single_literal(self) -> None:
-        sql = "SELECT $$ a; b $$"
+        sql = "SELECT $$ a -- b $$"
         assert SQLSanitizer().sanitize(sql) == sql
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            # MySQL: "..." is a string with backslash escapes, not an identifier
+            'SELECT "a\\"" ; DROP TABLE users; -- "',
+            # MySQL: '#' starts a line comment
+            "SELECT 1 # '\n; DROP TABLE users; -- '",
+            # MySQL: $a$ is an identifier, so the ';' is code
+            "SELECT $a$ ; DROP TABLE users; $a$",
+        ],
+    )
+    def test_mysql_parser_differentials_are_rejected(self, sql: str) -> None:
+        with pytest.raises(SQLSanitizationError):
+            SQLSanitizer().sanitize(sql)
 
     def test_verb_check_skips_leading_comment(self) -> None:
         sanitizer = SQLSanitizer(strip_comments=False, allowed_verbs=frozenset({"SELECT"}))

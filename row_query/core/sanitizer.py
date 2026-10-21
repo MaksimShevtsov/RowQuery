@@ -26,10 +26,14 @@ _LEADING_WORD = re.compile(r"\s*([A-Za-z_]\w*)")
 def _tokenize(sql: str) -> list[Token]:
     """Tokenize *sql* strictly for sanitization.
 
-    Plain ``'...'`` literals containing a backslash are rejected: MySQL treats
-    ``\\'`` as an escaped quote while PostgreSQL does not, so the literal's
-    extent is ambiguous and could hide a second statement. Use bound
-    parameters or a PostgreSQL ``E'...'`` literal instead.
+    The sanitizer does not know the target database, so constructs whose
+    extent differs between dialects are rejected (fail-closed) instead of
+    guessed:
+
+    * a backslash inside ``'...'``, ``"..."`` or ```...``` — MySQL treats
+      ``\\'`` / ``\\"`` as escaped quotes (and ``"..."`` as a string), while
+      PostgreSQL does not. Use bound parameters or ``E'...'`` instead.
+    * ``#`` outside literals — a line comment in MySQL, an operator elsewhere.
 
     Raises:
         SQLSanitizationError: On unterminated or ambiguous tokens.
@@ -39,10 +43,14 @@ def _tokenize(sql: str) -> list[Token]:
     except UnterminatedTokenError as e:
         raise SQLSanitizationError(str(e)) from None
     for kind, text in tokens:
-        if kind == "string" and text.startswith("'") and "\\" in text:
+        if kind in ("string", "identifier") and text[0] in "'\"`" and "\\" in text:
             raise SQLSanitizationError(
-                "Backslashes in string literals are ambiguous across databases; "
-                "pass the value as a bound parameter instead"
+                "Backslashes in quoted literals or identifiers are ambiguous across "
+                "databases; pass the value as a bound parameter instead"
+            )
+        if kind == "code" and "#" in text:
+            raise SQLSanitizationError(
+                "'#' outside string literals is ambiguous across databases (a comment in MySQL)"
             )
     return tokens
 
@@ -73,6 +81,11 @@ def _check_single_statement(sql: str) -> None:
     for kind, text in _tokenize(sql):
         if kind == "comment":
             continue
+        if kind == "string" and text.startswith("$") and ";" in text:
+            # $tag$...$tag$ is a literal only in PostgreSQL; elsewhere the ';' is code.
+            raise SQLSanitizationError(
+                "Semicolons inside dollar-quoted strings are not permitted in inline SQL"
+            )
         for ch in text if kind == "code" else "x":
             if terminated and not ch.isspace():
                 raise SQLSanitizationError(
