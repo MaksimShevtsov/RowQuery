@@ -46,3 +46,70 @@ jobs:
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: false
+
+  integration-servers:
+    name: Integration (PostgreSQL + MySQL + Oracle)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: rowquery
+          POSTGRES_DB: rowquery
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: rowquery
+          MYSQL_DATABASE: rowquery
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -prowquery --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          ORACLE_PASSWORD: rowquery
+          APP_USER: rowquery
+          APP_USER_PASSWORD: rowquery
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      ROWQUERY_TEST_POSTGRESQL: postgresql://postgres:rowquery@127.0.0.1:5432/rowquery
+      ROWQUERY_TEST_MYSQL: mysql://root:rowquery@127.0.0.1:3306/rowquery
+      ROWQUERY_TEST_ORACLE: oracle://rowquery:rowquery@127.0.0.1:1521/FREEPDB1
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --extra all --extra dev
+
+      - name: Run server integration tests
+        run: uv run pytest tests/integration/test_server_backends.py -m integration -v -rs

@@ -11,43 +11,39 @@ from row_query.core.connection import ConnectionConfig
 class SqliteSyncAdapter:
     """Synchronous SQLite adapter using stdlib sqlite3."""
 
-    @property
-    def paramstyle(self) -> str:
-        return "named"
+    paramstyle = "named"
+    positional_paramstyle = "qmark"
+    backslash_escapes = False
 
-    def create_pool(self, config: ConnectionConfig) -> list[sqlite3.Connection]:
-        """Create a 'pool' (list of connections) for SQLite."""
-        pool: list[sqlite3.Connection] = []
-        for _ in range(config.pool_size):
-            conn = sqlite3.connect(config.database)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            pool.append(conn)
-        return pool
+    def connect(self, config: ConnectionConfig) -> sqlite3.Connection:
+        """Open a connection usable from any thread (the pool serialises access)."""
+        conn: sqlite3.Connection = sqlite3.connect(
+            config.database, check_same_thread=False, **config.extra
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
 
-    def acquire_connection(self, pool: list[sqlite3.Connection]) -> sqlite3.Connection:
-        """Acquire a connection from the pool."""
-        if not pool:
-            raise RuntimeError("No connections available in pool")
-        return pool.pop()
+    def close_connection(self, connection: sqlite3.Connection) -> None:
+        connection.close()
 
-    def release_connection(
-        self, connection: sqlite3.Connection, pool: list[sqlite3.Connection]
-    ) -> None:
-        """Release a connection back to the pool."""
-        pool.append(connection)
+    def is_connection_alive(self, connection: sqlite3.Connection) -> bool:
+        return True
 
-    def close_pool(self, pool: list[sqlite3.Connection]) -> None:
-        """Close all connections in the pool."""
-        for conn in pool:
-            conn.close()
-        pool.clear()
+    def begin(self, connection: sqlite3.Connection) -> None:
+        """Issue an explicit BEGIN.
+
+        The sqlite3 module only opens transactions implicitly before DML, so
+        DDL (CREATE/ALTER/DROP) would otherwise run in autocommit mode.
+        """
+        if not connection.in_transaction:
+            connection.execute("BEGIN")
 
     def execute(
         self,
         connection: sqlite3.Connection,
         sql: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple[Any, ...] | None = None,
     ) -> sqlite3.Cursor:
         """Execute SQL and return a cursor."""
         return connection.execute(sql, params if params is not None else {})
@@ -56,43 +52,34 @@ class SqliteSyncAdapter:
 class SqliteAsyncAdapter:
     """Asynchronous SQLite adapter using aiosqlite."""
 
-    @property
-    def paramstyle(self) -> str:
-        return "named"
+    paramstyle = "named"
+    positional_paramstyle = "qmark"
+    backslash_escapes = False
 
-    async def create_pool_async(self, config: ConnectionConfig) -> list[Any]:
-        """Create async SQLite connection pool."""
+    async def connect_async(self, config: ConnectionConfig) -> Any:
         import aiosqlite
 
-        pool: list[Any] = []
-        for _ in range(config.pool_size):
-            conn = await aiosqlite.connect(config.database)
-            conn.row_factory = aiosqlite.Row
-            await conn.execute("PRAGMA journal_mode=WAL")
-            pool.append(conn)
-        return pool
+        conn = await aiosqlite.connect(config.database, **config.extra)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL")
+        return conn
 
-    async def acquire_connection_async(self, pool: list[Any]) -> Any:
-        """Acquire an async connection from the pool."""
-        if not pool:
-            raise RuntimeError("No connections available in pool")
-        return pool.pop()
+    async def close_connection_async(self, connection: Any) -> None:
+        await connection.close()
 
-    async def release_connection_async(self, connection: Any, pool: list[Any]) -> None:
-        """Release an async connection back to the pool."""
-        pool.append(connection)
+    def is_connection_alive(self, connection: Any) -> bool:
+        return True
 
-    async def close_pool_async(self, pool: list[Any]) -> None:
-        """Close all async connections."""
-        for conn in pool:
-            await conn.close()
-        pool.clear()
+    async def begin_async(self, connection: Any) -> None:
+        """Issue an explicit BEGIN so that DDL is transactional too."""
+        if not connection.in_transaction:
+            await connection.execute("BEGIN")
 
     async def execute_async(
         self,
         connection: Any,
         sql: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple[Any, ...] | None = None,
     ) -> Any:
         """Execute SQL asynchronously and return a cursor."""
         return await connection.execute(sql, params if params is not None else {})

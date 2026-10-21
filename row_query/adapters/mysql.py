@@ -10,102 +10,100 @@ from row_query.core.connection import ConnectionConfig
 class MysqlSyncAdapter:
     """Synchronous MySQL adapter using mysql-connector-python."""
 
-    @property
-    def paramstyle(self) -> str:
-        return "pyformat"
+    paramstyle = "pyformat"
+    positional_paramstyle = "format"
+    backslash_escapes = True
 
-    def create_pool(self, config: ConnectionConfig) -> list[Any]:
-        """Create a pool (list of connections) for MySQL."""
+    def connect(self, config: ConnectionConfig) -> Any:
         import mysql.connector
 
-        pool: list[Any] = []
-        for _ in range(config.pool_size):
-            conn = mysql.connector.connect(
-                host=config.host,
-                port=config.port,
-                user=config.user,
-                password=config.password,
-                database=config.database,
-            )
-            pool.append(conn)
-        return pool
+        kwargs: dict[str, Any] = {
+            "host": config.host,
+            "port": config.port,
+            "user": config.user,
+            "password": config.password,
+            "database": config.database,
+            **config.extra,
+        }
+        return mysql.connector.connect(**{k: v for k, v in kwargs.items() if v is not None})
 
-    def acquire_connection(self, pool: list[Any]) -> Any:
-        """Acquire a connection from the pool."""
-        if not pool:
-            raise RuntimeError("No connections available in pool")
-        return pool.pop()
+    def close_connection(self, connection: Any) -> None:
+        connection.close()
 
-    def release_connection(self, connection: Any, pool: list[Any]) -> None:
-        """Release a connection back to the pool."""
-        pool.append(connection)
+    def is_connection_alive(self, connection: Any) -> bool:
+        # Local check only: is_connected() pings the server on every call.
+        # A connection broken server-side fails its first query and is then
+        # discarded when the pool's rollback-on-release fails.
+        is_closed = getattr(connection, "is_closed", None)  # C extension
+        if is_closed is not None:
+            return not is_closed()
+        return getattr(connection, "_socket", None) is not None
 
-    def close_pool(self, pool: list[Any]) -> None:
-        """Close all connections in the pool."""
-        for conn in pool:
-            conn.close()
-        pool.clear()
+    def begin(self, connection: Any) -> None:
+        """Transactions start implicitly with the first statement."""
 
     def execute(
         self,
         connection: Any,
         sql: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple[Any, ...] | None = None,
     ) -> Any:
-        """Execute SQL and return a cursor with dictionary results."""
-        cursor = connection.cursor(dictionary=True)
-        cursor.execute(sql, params or {})
+        """Execute SQL and return a buffered dictionary cursor.
+
+        Buffering reads the whole result client-side so that a partially
+        consumed result never blocks the next statement ("Unread result found").
+        """
+        cursor = connection.cursor(dictionary=True, buffered=True)
+        try:
+            cursor.execute(sql, params)
+        except BaseException:
+            cursor.close()
+            raise
         return cursor
 
 
 class MysqlAsyncAdapter:
     """Asynchronous MySQL adapter using aiomysql."""
 
-    @property
-    def paramstyle(self) -> str:
-        return "pyformat"
+    paramstyle = "pyformat"
+    positional_paramstyle = "format"
+    backslash_escapes = True
 
-    async def create_pool_async(self, config: ConnectionConfig) -> list[Any]:
-        """Create async MySQL connection pool."""
+    async def connect_async(self, config: ConnectionConfig) -> Any:
         import aiomysql
 
-        pool: list[Any] = []
-        for _ in range(config.pool_size):
-            conn = await aiomysql.connect(
-                host=config.host,
-                port=config.port,
-                user=config.user,
-                password=config.password,
-                db=config.database,
-            )
-            pool.append(conn)
-        return pool
+        kwargs: dict[str, Any] = {
+            "host": config.host,
+            "port": config.port,
+            "user": config.user,
+            "password": config.password,
+            "db": config.database,
+            **config.extra,
+        }
+        return await aiomysql.connect(**{k: v for k, v in kwargs.items() if v is not None})
 
-    async def acquire_connection_async(self, pool: list[Any]) -> Any:
-        """Acquire an async connection from the pool."""
-        if not pool:
-            raise RuntimeError("No connections available in pool")
-        return pool.pop()
+    async def close_connection_async(self, connection: Any) -> None:
+        connection.close()
 
-    async def release_connection_async(self, connection: Any, pool: list[Any]) -> None:
-        """Release an async connection back to the pool."""
-        pool.append(connection)
+    def is_connection_alive(self, connection: Any) -> bool:
+        return not connection.closed
 
-    async def close_pool_async(self, pool: list[Any]) -> None:
-        """Close all async connections."""
-        for conn in pool:
-            conn.close()
-        pool.clear()
+    async def begin_async(self, connection: Any) -> None:
+        """Transactions start implicitly with the first statement."""
 
     async def execute_async(
         self,
         connection: Any,
         sql: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple[Any, ...] | None = None,
     ) -> Any:
-        """Execute SQL asynchronously and return a DictCursor."""
+        """Execute SQL asynchronously and return a (buffered) DictCursor."""
         import aiomysql
 
         cursor = await connection.cursor(aiomysql.DictCursor)
-        await cursor.execute(sql, params or {})
+        try:
+            await cursor.execute(sql, params)
+        except BaseException:
+            await cursor.close()
+            raise
         return cursor

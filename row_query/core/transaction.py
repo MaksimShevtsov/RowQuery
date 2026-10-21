@@ -1,18 +1,29 @@
 """Transaction management.
 
 Provides context managers for executing multiple SQL statements atomically.
-Auto-commits on success, auto-rolls-back on exception.
+Auto-commits on success, auto-rolls-back on exception. The connection is
+borrowed from the pool on enter and returned on exit.
+
+Transactions expose the same query API as engines (``fetch_one``,
+``fetch_all``, ``fetch_scalar``, ``execute``, ``mapper=``), but writes are
+only committed when the transaction commits.
 """
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, nullcontext
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from row_query.core.exceptions import ParameterBindingError, TransactionStateError
-from row_query.core.params import coerce_params, normalize_params, resolve_sql
+from row_query.core.exceptions import TransactionStateError
+from row_query.core.execution import AsyncExecutor, SyncExecutor, translate_error
 from row_query.core.registry import SQLRegistry
 from row_query.core.sanitizer import SQLSanitizer
+
+if TYPE_CHECKING:
+    from row_query.core.connection import AsyncConnectionManager, ConnectionManager
+
+_TX_LABEL = "<transaction>"
 
 
 class _TxState(Enum):
@@ -22,47 +33,49 @@ class _TxState(Enum):
     ROLLED_BACK = "rolled_back"
 
 
-def _rows_to_dicts(cursor: Any) -> list[dict[str, Any]]:
-    """Convert cursor results to list of dicts.
-
-    Handles both tuple-like rows and dict-like rows from different adapters.
-    """
-    if cursor.description is None:
-        return []
-    columns = [desc[0] for desc in cursor.description]
-    rows = cursor.fetchall()
-    if not rows:
-        return []
-
-    # Check if rows are already dict-like
-    first_row = rows[0]
-    if isinstance(first_row, dict):
-        return [dict(row) for row in rows]
-
-    # Tuple-like rows, zip with columns
-    return [dict(zip(columns, row, strict=True)) for row in rows]
+def _check_active(state: _TxState) -> None:
+    if state != _TxState.ACTIVE:
+        raise TransactionStateError(state.value, "execute")
 
 
-class TransactionManager:
+def _check_can_commit(state: _TxState) -> None:
+    if state in (_TxState.COMMITTED, _TxState.ROLLED_BACK, _TxState.IDLE):
+        raise TransactionStateError(state.value, "commit")
+
+
+def _check_can_rollback(state: _TxState) -> None:
+    if state in (_TxState.COMMITTED, _TxState.IDLE):
+        raise TransactionStateError(state.value, "rollback")
+
+
+class TransactionManager(SyncExecutor):
     """Synchronous transaction context manager."""
+
+    _autocommit = False
 
     def __init__(
         self,
-        connection: Any,
-        adapter: Any,
+        connection_manager: ConnectionManager,
         registry: SQLRegistry,
-        pool: Any = None,
         sanitizer: SQLSanitizer | None = None,
     ) -> None:
-        self._connection = connection
-        self._adapter = adapter
+        self._connection_manager = connection_manager
+        self._adapter = connection_manager.adapter
         self._registry = registry
-        self._pool = pool
         self._sanitizer = sanitizer
-        self._paramstyle: str = adapter.paramstyle
+        self._conn: Any = None
         self._state = _TxState.IDLE
 
     def __enter__(self) -> TransactionManager:
+        if self._state != _TxState.IDLE:
+            raise TransactionStateError(self._state.value, "begin")
+        conn = self._connection_manager.acquire()
+        try:
+            self._adapter.begin(conn)
+        except Exception as e:
+            self._connection_manager.release(conn)
+            raise translate_error(_TX_LABEL, e) from e
+        self._conn = conn
         self._state = _TxState.ACTIVE
         return self
 
@@ -75,128 +88,66 @@ class TransactionManager:
         try:
             if self._state == _TxState.ACTIVE:
                 if exc_type is not None:
-                    self._connection.rollback()
-                    self._state = _TxState.ROLLED_BACK
+                    self.rollback()
                 else:
-                    self._connection.commit()
-                    self._state = _TxState.COMMITTED
+                    self.commit()
         finally:
-            if self._pool is not None:
-                self._adapter.release_connection(self._connection, self._pool)
+            conn, self._conn = self._conn, None
+            if conn is not None:
+                self._connection_manager.release(conn)
 
-    def execute(
-        self,
-        query: str,
-        params: Any = None,
-    ) -> int:
-        """Execute a write query within this transaction.
-
-        *query* may be a registry key or an inline SQL string.
-        *params* may be a dict, tuple/list, or scalar.
-        """
-        self._check_active()
-        sql, label = resolve_sql(query, self._registry, self._sanitizer)
-        sql = normalize_params(sql, self._paramstyle)
-        try:
-            cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
-        except Exception as e:
-            raise ParameterBindingError(label, str(e)) from e
-        return int(cursor.rowcount)
-
-    def fetch_one(
-        self,
-        query: str,
-        params: Any = None,
-    ) -> dict[str, Any] | None:
-        """Fetch a single row within transaction context.
-
-        *query* may be a registry key or an inline SQL string.
-        *params* may be a dict, tuple/list, or scalar.
-        """
-        self._check_active()
-        sql, label = resolve_sql(query, self._registry, self._sanitizer)
-        sql = normalize_params(sql, self._paramstyle)
-        try:
-            cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
-        except Exception as e:
-            raise ParameterBindingError(label, str(e)) from e
-        rows = _rows_to_dicts(cursor)
-        if not rows:
-            return None
-        return rows[0]
-
-    def fetch_all(
-        self,
-        query: str,
-        params: Any = None,
-    ) -> list[dict[str, Any]]:
-        """Fetch all rows within transaction context.
-
-        *query* may be a registry key or an inline SQL string.
-        *params* may be a dict, tuple/list, or scalar.
-        """
-        self._check_active()
-        sql, label = resolve_sql(query, self._registry, self._sanitizer)
-        sql = normalize_params(sql, self._paramstyle)
-        try:
-            cursor = self._adapter.execute(self._connection, sql, coerce_params(params))
-        except Exception as e:
-            raise ParameterBindingError(label, str(e)) from e
-        return _rows_to_dicts(cursor)
+    def _connection(self) -> AbstractContextManager[Any]:
+        _check_active(self._state)
+        return nullcontext(self._conn)
 
     def commit(self) -> None:
         """Explicitly commit the transaction."""
-        if self._state == _TxState.ROLLED_BACK:
-            raise TransactionStateError("rolled_back", "commit")
-        if self._state == _TxState.COMMITTED:
-            raise TransactionStateError("committed", "commit")
-        self._connection.commit()
+        _check_can_commit(self._state)
+        try:
+            self._conn.commit()
+        except Exception as e:
+            self._state = _TxState.ROLLED_BACK
+            raise translate_error(_TX_LABEL, e) from e
         self._state = _TxState.COMMITTED
 
     def rollback(self) -> None:
         """Explicitly rollback the transaction."""
-        if self._state == _TxState.COMMITTED:
-            raise TransactionStateError("committed", "rollback")
-        self._connection.rollback()
+        _check_can_rollback(self._state)
         self._state = _TxState.ROLLED_BACK
-
-    def _check_active(self) -> None:
-        if self._state == _TxState.IDLE:
-            raise TransactionStateError("idle", "execute")
-        if self._state == _TxState.COMMITTED:
-            raise TransactionStateError("committed", "execute")
-        if self._state == _TxState.ROLLED_BACK:
-            raise TransactionStateError("rolled_back", "execute")
+        try:
+            self._conn.rollback()
+        except Exception as e:
+            raise translate_error(_TX_LABEL, e) from e
 
 
-class AsyncTransactionManager:
+class AsyncTransactionManager(AsyncExecutor):
     """Asynchronous transaction context manager."""
+
+    _autocommit = False
 
     def __init__(
         self,
-        adapter: Any,
+        connection_manager: AsyncConnectionManager,
         registry: SQLRegistry,
-        connection_manager: Any,
-        connection: Any = None,
-        pool: Any = None,
         sanitizer: SQLSanitizer | None = None,
     ) -> None:
-        self._connection = connection
-        self._adapter = adapter
-        self._registry = registry
-        self._pool = pool
-        self._sanitizer = sanitizer
         self._connection_manager = connection_manager
-        self._paramstyle: str = adapter.paramstyle
+        self._adapter = connection_manager.adapter
+        self._registry = registry
+        self._sanitizer = sanitizer
+        self._conn: Any = None
         self._state = _TxState.IDLE
 
     async def __aenter__(self) -> AsyncTransactionManager:
-        # Acquire connection if not already provided
-        if self._connection is None:
-            if self._connection_manager._pool is None:
-                await self._connection_manager.initialize_pool()
-            self._pool = self._connection_manager._pool
-            self._connection = await self._adapter.acquire_connection_async(self._pool)
+        if self._state != _TxState.IDLE:
+            raise TransactionStateError(self._state.value, "begin")
+        conn = await self._connection_manager.acquire()
+        try:
+            await self._adapter.begin_async(conn)
+        except Exception as e:
+            await self._connection_manager.release(conn)
+            raise translate_error(_TX_LABEL, e) from e
+        self._conn = conn
         self._state = _TxState.ACTIVE
         return self
 
@@ -209,126 +160,33 @@ class AsyncTransactionManager:
         try:
             if self._state == _TxState.ACTIVE:
                 if exc_type is not None:
-                    await self._connection.rollback()
-                    self._state = _TxState.ROLLED_BACK
+                    await self.rollback()
                 else:
-                    await self._connection.commit()
-                    self._state = _TxState.COMMITTED
+                    await self.commit()
         finally:
-            if self._pool is not None:
-                await self._adapter.release_connection_async(self._connection, self._pool)
+            conn, self._conn = self._conn, None
+            if conn is not None:
+                await self._connection_manager.release(conn)
 
-    async def execute(
-        self,
-        query: str,
-        params: Any = None,
-    ) -> int:
-        """Execute a write query within this async transaction.
-
-        *query* may be a registry key or an inline SQL string.
-        *params* may be a dict, tuple/list, or scalar.
-        """
-        self._check_active()
-        sql, label = resolve_sql(query, self._registry, self._sanitizer)
-        sql = normalize_params(sql, self._paramstyle)
-        try:
-            cursor = await self._adapter.execute_async(
-                self._connection,
-                sql,
-                coerce_params(params),
-            )
-        except Exception as e:
-            raise ParameterBindingError(label, str(e)) from e
-        return int(cursor.rowcount)
-
-    async def fetch_one(
-        self,
-        query: str,
-        params: Any = None,
-    ) -> dict[str, Any] | None:
-        """Fetch a single row within async transaction context.
-
-        *query* may be a registry key or an inline SQL string.
-        *params* may be a dict, tuple/list, or scalar.
-        """
-        self._check_active()
-        sql, label = resolve_sql(query, self._registry, self._sanitizer)
-        sql = normalize_params(sql, self._paramstyle)
-        try:
-            cursor = await self._adapter.execute_async(
-                self._connection,
-                sql,
-                coerce_params(params),
-            )
-        except Exception as e:
-            raise ParameterBindingError(label, str(e)) from e
-        if cursor.description is None:
-            return None
-        columns = [desc[0] for desc in cursor.description]
-        rows_raw = await cursor.fetchall()
-
-        # Handle dict rows vs tuple rows
-        if rows_raw and isinstance(rows_raw[0], dict):
-            rows = [dict(row) for row in rows_raw]
-        else:
-            rows = [dict(zip(columns, row, strict=True)) for row in rows_raw]
-
-        if not rows:
-            return None
-        return rows[0]
-
-    async def fetch_all(
-        self,
-        query: str,
-        params: Any = None,
-    ) -> list[dict[str, Any]]:
-        """Fetch all rows within async transaction context.
-
-        *query* may be a registry key or an inline SQL string.
-        *params* may be a dict, tuple/list, or scalar.
-        """
-        self._check_active()
-        sql, label = resolve_sql(query, self._registry, self._sanitizer)
-        sql = normalize_params(sql, self._paramstyle)
-        try:
-            cursor = await self._adapter.execute_async(
-                self._connection,
-                sql,
-                coerce_params(params),
-            )
-        except Exception as e:
-            raise ParameterBindingError(label, str(e)) from e
-        if cursor.description is None:
-            return []
-        columns = [desc[0] for desc in cursor.description]
-        rows_raw = await cursor.fetchall()
-
-        # Handle dict rows vs tuple rows
-        if rows_raw and isinstance(rows_raw[0], dict):
-            return [dict(row) for row in rows_raw]
-        else:
-            return [dict(zip(columns, row, strict=True)) for row in rows_raw]
+    def _connection(self) -> AbstractAsyncContextManager[Any]:
+        _check_active(self._state)
+        return nullcontext(self._conn)
 
     async def commit(self) -> None:
         """Explicitly commit the async transaction."""
-        if self._state == _TxState.ROLLED_BACK:
-            raise TransactionStateError("rolled_back", "commit")
-        if self._state == _TxState.COMMITTED:
-            raise TransactionStateError("committed", "commit")
-        await self._connection.commit()
+        _check_can_commit(self._state)
+        try:
+            await self._conn.commit()
+        except Exception as e:
+            self._state = _TxState.ROLLED_BACK
+            raise translate_error(_TX_LABEL, e) from e
         self._state = _TxState.COMMITTED
 
     async def rollback(self) -> None:
         """Explicitly rollback the async transaction."""
-        if self._state == _TxState.COMMITTED:
-            raise TransactionStateError("committed", "rollback")
-        await self._connection.rollback()
+        _check_can_rollback(self._state)
         self._state = _TxState.ROLLED_BACK
-
-    def _check_active(self) -> None:
-        if self._state == _TxState.IDLE:
-            raise TransactionStateError("idle", "execute")
-        if self._state == _TxState.COMMITTED:
-            raise TransactionStateError("committed", "execute")
-        if self._state == _TxState.ROLLED_BACK:
-            raise TransactionStateError("rolled_back", "execute")
+        try:
+            await self._conn.rollback()
+        except Exception as e:
+            raise translate_error(_TX_LABEL, e) from e

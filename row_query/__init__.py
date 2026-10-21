@@ -15,6 +15,7 @@ from row_query.core.exceptions import (
     ConnectionError,  # noqa: A004
     DuplicateQueryError,
     ExecutionError,
+    IntegrityError,
     MappingError,
     MigrationError,
     MigrationExecutionError,
@@ -23,6 +24,8 @@ from row_query.core.exceptions import (
     ParameterBindingError,
     PlanCompilationError,
     PoolError,
+    PoolTimeoutError,
+    QueryExecutionError,
     QueryNotFoundError,
     RegistryError,
     RowQueryError,
@@ -66,7 +69,9 @@ __all__ = [
     "DuplicateQueryError",
     "ExecutionError",
     "MultipleRowsError",
+    "QueryExecutionError",
     "ParameterBindingError",
+    "IntegrityError",
     "SQLSanitizationError",
     "MappingError",
     "ColumnMismatchError",
@@ -80,4 +85,5 @@ __all__ = [
     "AdapterError",
     "ConnectionError",
     "PoolError",
+    "PoolTimeoutError",
 ]

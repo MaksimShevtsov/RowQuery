@@ -22,7 +22,7 @@ RowQuery's core dependency is Pydantic >=2.0.0. Database-specific drivers are op
 - **Not an ORM.** RowQuery does not generate SQL from Python model definitions. You write all SQL yourself.
 - **Not a schema generator.** RowQuery does not create database tables from class definitions. Use migrations or external tools for DDL.
 - **Not a migration-only tool.** While RowQuery includes a `MigrationManager`, it is a convenience feature, not the library's primary purpose.
-- **Not a full-featured connection pooling library.** RowQuery's adapters currently use a very simple built-in pool implemented as an in-memory `list` of connections (for example, `create_pool()` returns a list and `acquire_connection()` does `pool.pop()`). This is intended only as a lightweight convenience; it lacks the robustness, configuration options, and advanced features of production-grade pooling solutions provided by database drivers or external pooling tools.
+- **Not a full-featured connection pooling library.** RowQuery ships a small built-in bounded pool (lazy connections, waiting with `pool_timeout`, recycling after `pool_recycle`, rollback on release). It has no pre-ping, statistics or external pooler integration.
 - **Not a query builder with DSL syntax.** There is no fluent API for constructing SQL. You pass SQL strings directly or load them from `.sql` files via `SQLRegistry`.
 - **Not a data validation framework.** RowQuery maps query results to objects but does not validate business rules or enforce constraints beyond what the database itself provides.
 
@@ -195,16 +195,20 @@ engine = AsyncEngine.from_config(config, registry)
 AsyncEngine has identical methods, all `async`.
 
 **Query resolution:** The `query` parameter can be either:
-- A **registry key** (no whitespace): `"users.get_by_id"` — resolved via SQLRegistry.
-- **Inline SQL** (contains whitespace): `"SELECT * FROM users WHERE id = :id"` — used directly.
+- A **registry key**: a registered name or any dotted identifier such as `"users.get_by_id"` — resolved via SQLRegistry (unknown dotted keys raise `QueryNotFoundError`).
+- **Inline SQL**: anything else, e.g. `"SELECT * FROM users WHERE id = :id"` or a single-word statement such as `"VACUUM"` — used directly.
 
 **Parameter passing:** The `params` parameter accepts:
-- `dict` — Named parameters: `{"id": 1, "name": "Alice"}`
-- `tuple` or `list` — Positional parameters: `(1, "Alice")`
+- `dict` — Named parameters, written as `:name` in SQL: `{"id": 1, "name": "Alice"}`
+- `tuple` or `list` — Positional parameters, written as `?` in SQL: `(1, "Alice")`
 - Scalar value — Wrapped as `(value,)` automatically
 - `None` — No parameters (default)
 
-RowQuery automatically converts `:name` parameter syntax to the format required by each backend (`%(name)s` for PostgreSQL and MySQL, `:name` for SQLite and Oracle).
+Both placeholder styles are portable: RowQuery converts `:name` to `%(name)s` and `?` to `%s` for PostgreSQL and MySQL, and `?` to `:1, :2, ...` for Oracle. Literal `%` characters (e.g. `LIKE 'a%'`) are escaped automatically. Write `??` for a literal `?` (e.g. the PostgreSQL JSONB `?` operator) when using positional parameters. SQL already written in a driver's native style (`%s` / `%(name)s`) is passed through unchanged.
+
+**Connections and transaction state:** each engine call borrows a pooled connection. `execute()` commits immediately; any other open transaction state (read snapshots, locks, a failed statement) is rolled back when the connection returns to the pool. `Engine` can be shared between threads.
+
+**Errors:** driver exceptions are translated: constraint violations raise `IntegrityError`, binding problems `ParameterBindingError`, everything else `QueryExecutionError` (all subclasses of `ExecutionError`). The original driver exception is available as `__cause__`.
 
 **Optional SQLSanitizer:**
 
@@ -245,10 +249,10 @@ sqlite_file_config = ConnectionConfig(driver="sqlite", database="/path/to/mydb.s
 | `user` | `str \| None` | `None` | Authentication username |
 | `password` | `str \| None` | `None` | Authentication password |
 | `database` | `str` | (required) | Database name or path (`:memory:` for SQLite in-memory) |
-| `pool_size` | `int` | `5` | Maximum connections in pool |
-| `pool_timeout` | `int` | `30` | Reserved for future use. Currently has no effect at runtime. |
-| `pool_recycle` | `int` | `1800` | Reserved for future use. Currently has no effect at runtime. |
-| `extra` | `dict[str, Any]` | `{}` | Additional driver-specific parameters |
+| `pool_size` | `int` | `5` | Maximum open connections. Connections are opened lazily. |
+| `pool_timeout` | `float` | `30` | Seconds to wait for a free connection before raising `PoolTimeoutError`. |
+| `pool_recycle` | `float` | `1800` | Reopen connections older than this many seconds (`0` disables; ignored for SQLite). |
+| `extra` | `dict[str, Any]` | `{}` | Additional driver-specific connection arguments (passed to the driver's connect call; libpq parameters for PostgreSQL; `dsn` overrides host/port/database for Oracle). |
 
 See the Database Backends section for backend-specific ConnectionConfig examples.
 
@@ -351,7 +355,7 @@ config = ConnectionConfig(driver="sqlite", database="/path/to/mydb.sqlite")
 
 **Parameter style:** `:name` (named parameters). SQL uses `:name` syntax directly.
 
-**Adapter details:** Connections use WAL journal mode and `sqlite3.Row` row factory for dict-like access.
+**Adapter details:** Connections use WAL journal mode and `sqlite3.Row` row factory for dict-like access. They are opened with `check_same_thread=False`; the pool guarantees one thread uses a connection at a time. Note that every `:memory:` connection is a separate database, so use `pool_size=1` (or a file) for in-memory databases.
 
 ### PostgreSQL
 
@@ -376,7 +380,7 @@ config = ConnectionConfig(
 
 **Parameter style:** `pyformat`. RowQuery automatically converts `:name` in your SQL to `%(name)s` before execution.
 
-**Adapter details:** Uses `psycopg.rows.dict_row` row factory. Connection string is built from ConnectionConfig fields.
+**Adapter details:** Uses `psycopg.rows.dict_row` row factory. The connection string is built with `psycopg.conninfo.make_conninfo`, so special characters in passwords are quoted; `extra` adds libpq parameters such as `sslmode`. On Windows, async mode requires a `SelectorEventLoop`.
 
 ### MySQL
 
@@ -401,7 +405,7 @@ config = ConnectionConfig(
 
 **Parameter style:** `pyformat`. RowQuery automatically converts `:name` in your SQL to `%(name)s` before execution.
 
-**Adapter details:** Sync adapter uses `cursor(dictionary=True)`. Async adapter uses `aiomysql.DictCursor`.
+**Adapter details:** Sync adapter uses buffered `cursor(dictionary=True, buffered=True)` cursors. Async adapter uses `aiomysql.DictCursor`. Cursors are always closed after use.
 
 ### Oracle
 
@@ -424,9 +428,9 @@ config = ConnectionConfig(
 )
 ```
 
-**Parameter style:** `named`. SQL uses `:name` syntax directly (same as SQLite).
+**Parameter style:** `named`. SQL uses `:name` syntax directly (same as SQLite). Positional `?` placeholders are converted to `:1, :2, ...`.
 
-**Adapter details:** DSN format is `host:port/database`. Uses a custom row factory to convert tuples to dicts with lowercased column names.
+**Adapter details:** DSN format is `host:port/database` (port defaults to 1521; `extra={"dsn": ...}` overrides). A custom row factory converts tuples to dicts. Column names that Oracle reports in ALL CAPS (unquoted identifiers) are lowercased to match the other backends; quoted mixed-case aliases are preserved.
 
 ## Result Mapping
 
@@ -626,11 +630,14 @@ with engine.transaction() as tx:
 
 **Available methods within a transaction:**
 
+Transactions have the same query API as the engine (including `mapper=`, `fetch_scalar` and `MultipleRowsError` from `fetch_one`); writes are committed only when the transaction commits. The connection is acquired when the `with` block is entered. On SQLite an explicit `BEGIN` is issued so DDL statements are part of the transaction.
+
 | Method | Signature | Returns |
 |--------|-----------|---------|
 | `execute` | `(query, params=None)` | `int` (affected row count) |
-| `fetch_one` | `(query, params=None)` | `dict[str, Any] \| None` |
-| `fetch_all` | `(query, params=None)` | `list[dict[str, Any]]` |
+| `fetch_one` | `(query, params=None, *, mapper=None)` | `dict`, mapped object, or `None` |
+| `fetch_all` | `(query, params=None, *, mapper=None)` | `list[dict]` or `list[T]` |
+| `fetch_scalar` | `(query, params=None)` | `Any` or `None` |
 | `commit` | `()` | `None` |
 | `rollback` | `()` | `None` |
 
@@ -727,11 +734,11 @@ version = manager.current_version()  # "003" or None if no migrations applied
 | `file_path` | `Path` | Absolute path to the `.sql` file |
 | `applied` | `bool` | Whether this migration has been applied (default: `False`) |
 
-**File naming convention:** `NNN_description.sql` where `NNN` is a zero-padded numeric version and `description` uses underscores. Files not matching this pattern raise `MigrationFileError`.
+**File naming convention:** `NNN_description.sql` where `NNN` is a numeric version and `description` uses underscores. Migrations are ordered numerically (`9_a.sql` before `10_b.sql`). Files not matching this pattern, or two files with the same number, raise `MigrationFileError`.
 
-**Tracking:** MigrationManager creates a `schema_migrations` table to track applied versions.
+**Multiple statements:** a file may contain several statements separated by `;`. Semicolons inside string literals, quoted identifiers, comments and PostgreSQL dollar-quoted bodies do not split. For procedural code with internal semicolons (MySQL/Oracle `BEGIN ... END`), add a `-- rowquery:no-split` line to run the file as a single statement.
 
-**Note:** The current implementation uses SQLite-specific SQL syntax for the tracking table. Multi-backend migration support may require adaptation.
+**Tracking:** MigrationManager creates a portable `schema_migrations` table (SQLite, PostgreSQL, MySQL, Oracle) to track applied versions. Each migration runs in one transaction with its tracking row; MySQL and Oracle commit implicitly after DDL, so a failed migration may leave earlier statements applied there.
 
 ## Repository Pattern
 
@@ -821,7 +828,9 @@ RowQueryError
 │   └── DuplicateQueryError
 ├── ExecutionError
 │   ├── MultipleRowsError
-│   ├── ParameterBindingError
+│   ├── QueryExecutionError
+│   │   ├── ParameterBindingError
+│   │   └── IntegrityError
 │   └── SQLSanitizationError
 ├── MappingError
 │   ├── ColumnMismatchError
@@ -835,6 +844,7 @@ RowQueryError
 └── AdapterError
     ├── ConnectionError
     └── PoolError
+        └── PoolTimeoutError
 ```
 
 **Detailed reference:**
@@ -847,7 +857,9 @@ RowQueryError
 | `DuplicateQueryError` | `RegistryError` | Two SQL files produce the same registry key | `query_name: str` |
 | `ExecutionError` | `RowQueryError` | Base for query execution errors | — |
 | `MultipleRowsError` | `ExecutionError` | `fetch_one()` returns more than one row | `query_name: str`, `row_count: int` |
-| `ParameterBindingError` | `ExecutionError` | Parameter binding fails during query execution | `query_name: str` |
+| `QueryExecutionError` | `ExecutionError` | The database rejects a query (syntax error, missing table, ...). Driver exception in `__cause__`. | `query_name: str`, `detail: str` |
+| `ParameterBindingError` | `QueryExecutionError` | Missing, extra or mistyped parameters | `query_name: str`, `detail: str` |
+| `IntegrityError` | `QueryExecutionError` | Constraint violation (unique, foreign key, not null, check) | `query_name: str`, `detail: str` |
 | `SQLSanitizationError` | `ExecutionError` | SQLSanitizer rejects inline SQL | — |
 | `MappingError` | `RowQueryError` | Base for result mapping errors | — |
 | `ColumnMismatchError` | `MappingError` | Row columns don't match target class fields | `target_class: str`, `missing_fields: list[str]` |
@@ -860,7 +872,8 @@ RowQueryError
 | `MigrationExecutionError` | `MigrationError` | Migration SQL execution fails | `version: str` |
 | `AdapterError` | `RowQueryError` | Base for adapter/connection errors | — |
 | `ConnectionError` | `AdapterError` | Database connection cannot be established | — |
-| `PoolError` | `AdapterError` | Connection pool error (exhausted, timeout) | — |
+| `PoolError` | `AdapterError` | Connection pool error (e.g. pool closed) | — |
+| `PoolTimeoutError` | `PoolError` | No connection became free within `pool_timeout` | `pool_size: int`, `timeout: float` |
 
 ## Terminology Glossary
 
@@ -880,4 +893,4 @@ RowQueryError
 | **TransactionManager** | A context manager for executing multiple SQL statements atomically. Auto-commits on success, auto-rolls-back on exception. `AsyncTransactionManager` is its async counterpart. |
 | **MigrationManager** | Discovers, tracks, and applies SQL migration files in version order using a `schema_migrations` tracking table. |
 | **Repository** | A DDD-style base class for organizing database access around domain entities. Wraps an Engine and optional mapper. `AsyncRepository` is its async counterpart. |
-| **:name parameter** | The parameter syntax used in SQL queries (e.g., `:id`, `:name`). RowQuery automatically converts this to the format required by each backend. |
+| **:name parameter** | The named parameter syntax used in SQL queries (e.g., `:id`, `:name`). RowQuery automatically converts this to the format required by each backend. Positional `?` placeholders are converted the same way. |

@@ -6,15 +6,38 @@ from typing import Any
 
 from row_query.core.connection import ConnectionConfig
 
+_DEFAULT_PORT = 1521
+
 
 def _build_dsn(config: ConnectionConfig) -> str:
-    """Build an Oracle DSN string from config fields (host:port/database)."""
-    return f"{config.host}:{config.port}/{config.database}"
+    """Build an Oracle DSN string (host:port/service) from config fields.
+
+    A ``dsn`` key in ``config.extra`` takes precedence.
+    """
+    if "dsn" in config.extra:
+        return str(config.extra["dsn"])
+    return f"{config.host}:{config.port or _DEFAULT_PORT}/{config.database}"
+
+
+def _connect_kwargs(config: ConnectionConfig) -> dict[str, Any]:
+    extra = {k: v for k, v in config.extra.items() if k != "dsn"}
+    return {"user": config.user, "password": config.password, "dsn": _build_dsn(config), **extra}
+
+
+def _column_key(name: str) -> str:
+    """Normalise Oracle column names.
+
+    Oracle folds unquoted identifiers to UPPERCASE where PostgreSQL, MySQL and
+    SQLite keep them as written (or lowercase), so all-uppercase names are
+    lowercased to keep result keys consistent across backends. Quoted
+    mixed-case aliases (``AS "userName"``) are preserved.
+    """
+    return name.lower() if name.isupper() else name
 
 
 def _make_row_factory(cursor: Any) -> Any:
     """Create a row factory that converts tuples to dicts using column names."""
-    columns = [col[0].lower() for col in cursor.description]
+    columns = [_column_key(col[0]) for col in cursor.description]
 
     def factory(*args: Any) -> dict[str, Any]:
         return dict(zip(columns, args, strict=True))
@@ -25,46 +48,37 @@ def _make_row_factory(cursor: Any) -> Any:
 class OracleSyncAdapter:
     """Synchronous Oracle adapter using oracledb."""
 
-    @property
-    def paramstyle(self) -> str:
-        return "named"
+    paramstyle = "named"
+    positional_paramstyle = "numeric"
+    backslash_escapes = False
 
-    def create_pool(self, config: ConnectionConfig) -> list[Any]:
-        """Create a 'pool' (list of connections) for Oracle."""
+    def connect(self, config: ConnectionConfig) -> Any:
         import oracledb
 
-        dsn = _build_dsn(config)
-        pool: list[Any] = []
-        for _ in range(config.pool_size):
-            conn = oracledb.connect(user=config.user, password=config.password, dsn=dsn)
-            pool.append(conn)
-        return pool
+        return oracledb.connect(**_connect_kwargs(config))
 
-    def acquire_connection(self, pool: list[Any]) -> Any:
-        """Acquire a connection from the pool."""
-        if not pool:
-            raise RuntimeError("No connections available in pool")
-        return pool.pop()
+    def close_connection(self, connection: Any) -> None:
+        connection.close()
 
-    def release_connection(self, connection: Any, pool: list[Any]) -> None:
-        """Release a connection back to the pool."""
-        pool.append(connection)
+    def is_connection_alive(self, connection: Any) -> bool:
+        return bool(connection.is_healthy())
 
-    def close_pool(self, pool: list[Any]) -> None:
-        """Close all connections in the pool."""
-        for conn in pool:
-            conn.close()
-        pool.clear()
+    def begin(self, connection: Any) -> None:
+        """Transactions start implicitly with the first statement."""
 
     def execute(
         self,
         connection: Any,
         sql: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple[Any, ...] | None = None,
     ) -> Any:
         """Execute SQL and return a cursor with dict row factory."""
         cursor = connection.cursor()
-        cursor.execute(sql, params or {})
+        try:
+            cursor.execute(sql, params if params is not None else {})
+        except BaseException:
+            cursor.close()
+            raise
         if cursor.description is not None:
             cursor.rowfactory = _make_row_factory(cursor)
         return cursor
@@ -73,48 +87,37 @@ class OracleSyncAdapter:
 class OracleAsyncAdapter:
     """Asynchronous Oracle adapter using oracledb async support."""
 
-    @property
-    def paramstyle(self) -> str:
-        return "named"
+    paramstyle = "named"
+    positional_paramstyle = "numeric"
+    backslash_escapes = False
 
-    async def create_pool_async(self, config: ConnectionConfig) -> list[Any]:
-        """Create an async Oracle connection pool."""
+    async def connect_async(self, config: ConnectionConfig) -> Any:
         import oracledb
 
-        dsn = _build_dsn(config)
-        pool: list[Any] = []
-        for _ in range(config.pool_size):
-            conn = await oracledb.connect_async(
-                user=config.user, password=config.password, dsn=dsn
-            )
-            pool.append(conn)
-        return pool
+        return await oracledb.connect_async(**_connect_kwargs(config))
 
-    async def acquire_connection_async(self, pool: list[Any]) -> Any:
-        """Acquire an async connection from the pool."""
-        if not pool:
-            raise RuntimeError("No connections available in pool")
-        return pool.pop()
+    async def close_connection_async(self, connection: Any) -> None:
+        await connection.close()
 
-    async def release_connection_async(self, connection: Any, pool: list[Any]) -> None:
-        """Release an async connection back to the pool."""
-        pool.append(connection)
+    def is_connection_alive(self, connection: Any) -> bool:
+        return bool(connection.is_healthy())
 
-    async def close_pool_async(self, pool: list[Any]) -> None:
-        """Close all async connections."""
-        for conn in pool:
-            await conn.close()
-        pool.clear()
+    async def begin_async(self, connection: Any) -> None:
+        """Transactions start implicitly with the first statement."""
 
     async def execute_async(
         self,
         connection: Any,
         sql: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple[Any, ...] | None = None,
     ) -> Any:
         """Execute SQL asynchronously and return a cursor with dict row factory."""
         cursor = connection.cursor()
-        await cursor.execute(sql, params or {})
+        try:
+            await cursor.execute(sql, params if params is not None else {})
+        except BaseException:
+            cursor.close()
+            raise
         if cursor.description is not None:
             cursor.rowfactory = _make_row_factory(cursor)
         return cursor
