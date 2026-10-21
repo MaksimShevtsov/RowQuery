@@ -81,13 +81,23 @@ class TestSanitizerBypasses:
             sanitizer.sanitize("SELECT 1 --x; DROP TABLE users")
         assert sanitizer.sanitize("SELECT 1 -- ok") == "SELECT 1 -- ok"
 
-    def test_line_comment_ends_at_carriage_return(self) -> None:
-        # PostgreSQL ends '--' comments at \r, so the DROP would be executed
-        sql = "SELECT 1 -- x\r; DROP TABLE users"
-        with pytest.raises(SQLSanitizationError, match="Multiple SQL statements"):
-            SQLSanitizer(strip_comments=False).sanitize(sql)
-        with pytest.raises(SQLSanitizationError, match="Multiple SQL statements"):
-            SQLSanitizer().sanitize(sql)
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            # PostgreSQL ends the comment at \r: the DROP is code there
+            "SELECT 1 -- x\r; DROP TABLE users",
+            # MySQL ends it at \n: the quote is commented out and the DROP is code there
+            "SELECT 1 -- x\r'\n; DROP TABLE users; -- '",
+        ],
+    )
+    @pytest.mark.parametrize("strip", [True, False])
+    def test_carriage_return_inside_line_comment_rejected(self, sql: str, strip: bool) -> None:
+        with pytest.raises(SQLSanitizationError, match="Carriage returns"):
+            SQLSanitizer(strip_comments=strip).sanitize(sql)
+
+    def test_crlf_line_endings_allowed(self) -> None:
+        sql = "SELECT 1 -- note\r\nFROM t"
+        assert SQLSanitizer(strip_comments=False).sanitize(sql) == sql
 
     @pytest.mark.parametrize(
         "sql",
