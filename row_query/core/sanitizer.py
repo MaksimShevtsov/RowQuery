@@ -30,10 +30,15 @@ def _tokenize(sql: str) -> list[Token]:
     extent differs between dialects are rejected (fail-closed) instead of
     guessed:
 
-    * a backslash inside ``'...'``, ``"..."`` or ```...``` — MySQL treats
-      ``\\'`` / ``\\"`` as escaped quotes (and ``"..."`` as a string), while
-      PostgreSQL does not. Use bound parameters or ``E'...'`` instead.
+    * a backslash inside any quoted literal or identifier — whether ``\\``
+      escapes a quote depends on the database and its settings (MySQL
+      ``NO_BACKSLASH_ESCAPES``, PostgreSQL ``E'...'``).
+    * dollar-quoted strings (``$tag$...$tag$``) — a literal only in
+      PostgreSQL; in MySQL ``$tag$`` is an identifier and the body is code.
     * ``#`` outside literals — a line comment in MySQL, an operator elsewhere.
+    * ``--`` not followed by whitespace — not a comment in MySQL.
+
+    Pass such values as bound parameters instead.
 
     Raises:
         SQLSanitizationError: On unterminated or ambiguous tokens.
@@ -43,14 +48,23 @@ def _tokenize(sql: str) -> list[Token]:
     except UnterminatedTokenError as e:
         raise SQLSanitizationError(str(e)) from None
     for kind, text in tokens:
-        if kind in ("string", "identifier") and text[0] in "'\"`" and "\\" in text:
+        if kind in ("string", "identifier") and "\\" in text:
             raise SQLSanitizationError(
                 "Backslashes in quoted literals or identifiers are ambiguous across "
                 "databases; pass the value as a bound parameter instead"
             )
+        if kind == "string" and text.startswith("$"):
+            raise SQLSanitizationError(
+                "Dollar-quoted strings are ambiguous across databases; "
+                "pass the value as a bound parameter instead"
+            )
         if kind == "code" and "#" in text:
             raise SQLSanitizationError(
                 "'#' outside string literals is ambiguous across databases (a comment in MySQL)"
+            )
+        if kind == "comment" and text.startswith("--") and text[2:3] not in ("", " ", "\t", "\r"):
+            raise SQLSanitizationError(
+                "'--' comments must be followed by a space (otherwise not a comment in MySQL)"
             )
     return tokens
 
@@ -81,11 +95,6 @@ def _check_single_statement(sql: str) -> None:
     for kind, text in _tokenize(sql):
         if kind == "comment":
             continue
-        if kind == "string" and text.startswith("$") and ";" in text:
-            # $tag$...$tag$ is a literal only in PostgreSQL; elsewhere the ';' is code.
-            raise SQLSanitizationError(
-                "Semicolons inside dollar-quoted strings are not permitted in inline SQL"
-            )
         for ch in text if kind == "code" else "x":
             if terminated and not ch.isspace():
                 raise SQLSanitizationError(

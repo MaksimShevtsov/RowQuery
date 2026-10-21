@@ -70,9 +70,16 @@ class TestSanitizerBypasses:
         with pytest.raises(SQLSanitizationError):
             SQLSanitizer().sanitize(sql)
 
-    def test_dollar_quoted_body_is_a_single_literal(self) -> None:
-        sql = "SELECT $$ a -- b $$"
-        assert SQLSanitizer().sanitize(sql) == sql
+    def test_dollar_quoted_strings_are_rejected(self) -> None:
+        with pytest.raises(SQLSanitizationError, match="Dollar-quoted"):
+            SQLSanitizer().sanitize("SELECT $$ harmless $$")
+
+    def test_comment_requires_space_after_dashes(self) -> None:
+        sanitizer = SQLSanitizer(strip_comments=False)
+        # MySQL parses this as `1 - -x; DROP ...`, not as a comment
+        with pytest.raises(SQLSanitizationError, match="followed by a space"):
+            sanitizer.sanitize("SELECT 1 --x; DROP TABLE users")
+        assert sanitizer.sanitize("SELECT 1 -- ok") == "SELECT 1 -- ok"
 
     @pytest.mark.parametrize(
         "sql",
@@ -83,6 +90,10 @@ class TestSanitizerBypasses:
             "SELECT 1 # '\n; DROP TABLE users; -- '",
             # MySQL: $a$ is an identifier, so the ';' is code
             "SELECT $a$ ; DROP TABLE users; $a$",
+            # MySQL: a quote inside the "dollar body" opens a string that swallows the rest
+            "SELECT $a$ ' $a$, '; DROP TABLE users; -- '",
+            # MySQL NO_BACKSLASH_ESCAPES: \ does not escape in E'...'
+            "SELECT E'x\\'', 1 ; DROP TABLE users; -- '",
         ],
     )
     def test_mysql_parser_differentials_are_rejected(self, sql: str) -> None:
