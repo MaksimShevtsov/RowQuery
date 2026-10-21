@@ -33,8 +33,16 @@ jobs:
     name: Publish to PyPI
     needs: [build]
     runs-on: ubuntu-latest
+    # Records a GitHub deployment per release (repo sidebar → Deployments).
+    environment:
+      name: pypi
+      url: https://pypi.org/project/rowquery/${{ steps.version.outputs.version }}/
 
     steps:
+      - name: Resolve version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Download distributions
         uses: actions/download-artifact@v4
         with:
